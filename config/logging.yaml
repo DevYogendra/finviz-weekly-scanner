@@ -1,0 +1,13 @@
+version: 1
+disable_existing_loggers: false
+formatters:
+  structured:
+    format: "%(asctime)s %(levelname)s %(name)s run_id=%(run_id)s %(message)s"
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: structured
+    level: INFO
+root:
+  handlers: [console]
+  level: INFO

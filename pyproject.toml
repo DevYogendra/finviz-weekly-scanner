@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finviz-weekly-scanner"
+version = "0.1.0"
+description = "Weekly Finviz screener snapshotter and TradingView watchlist exporter"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "playwright>=1.45",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "PyYAML>=6.0",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "ruff>=0.6", "mypy>=1.11", "types-PyYAML>=6.0"]
+
+[project.scripts]
+finviz-scanner = "finviz_scanner.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: opt-in live Finviz integration tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["finviz_scanner"]
+strict = true
+warn_unreachable = true
+pretty = true

@@ -1,0 +1,2 @@
+[console_scripts]
+finviz-scanner = finviz_scanner.cli:app

@@ -1,0 +1,39 @@
+app:
+  name: finviz-stage2-weekly
+  timezone: America/Denver
+
+schedule:
+  day: saturday
+  time: "08:00"
+  retries: 2
+  retry_delay_minutes: 15
+
+finviz:
+  saved_screen_url: "COPY_EXACT_SAVED_SCREEN_URL_HERE"
+  expected_page_size: 20
+  browser_headless: true
+  save_screenshots: true
+  extraction_mode: dom
+  allow_ocr_fallback: false
+
+validation:
+  require_exact_count: true
+  fail_on_unresolved_exchange: true
+  fail_on_duplicate_ticker: false
+
+output:
+  root_directory: "C:\\01.My\\02.Git\\finviz-weekly-scanner\\Documents\\FinvizWeeklyScanner"
+  tradingview_sort: finviz_rank
+  generate_csv: true
+  generate_json: true
+  generate_markdown_report: true
+
+notification:
+  provider: local
+  recipients: []
+  attach_tradingview_file: true
+  attach_report: true
+
+tradingview:
+  automated_upload_enabled: false
+  target_watchlist_name: Stage 2 Weekly
