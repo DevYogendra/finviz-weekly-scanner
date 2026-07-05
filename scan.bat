@@ -1,0 +1,1 @@
+finviz-scanner scan --headed

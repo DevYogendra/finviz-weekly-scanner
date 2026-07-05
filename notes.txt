@@ -1,0 +1,3 @@
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install.ps1
+.\.venv\Scripts\Activate.ps1

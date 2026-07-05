@@ -1,0 +1,10 @@
+Activate environment:-	.\.venv\Scripts\Activate.ps1
+Interactive initial configuration:-	finviz-scanner configure
+List screens:-	finviz-scanner list-screens
+Refresh symbol master:-	finviz-scanner refresh-symbol-master
+Health check:-	finviz-scanner doctor
+Run all enabled screens:-	finviz-scanner scan --headed
+Run selected screens:-	finviz-scanner scan --screen stage-2 --screen momentum --headed
+Show recent runs:-	finviz-scanner history
+Install schedule:-	finviz-scanner install-schedule
+Remove schedule:-	finviz-scanner remove-schedule
