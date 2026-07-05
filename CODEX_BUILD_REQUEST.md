@@ -1,1168 +1,942 @@
-# Codex Build Request — Finviz Weekly Stage-2 Scanner
+# CODEX_BUILD_REQUEST.md - Release Reconstruction for `finviz-weekly-scanner`
 
-**Use this file as the complete implementation brief for Codex.**
+## 1. Document Control And Revision Status
 
-Codex must read this entire file before creating or changing code. The product specification later in this document is authoritative. Where the implementation instructions and product specification differ, choose the safer behavior and document the decision.
+**Document purpose:** Repository-grounded product, architecture, operating, and release-backlog specification.
 
----
+**Revision date:** 2026-07-05
 
-## 1. Outcome required from Codex
+**Evidence used:** Current source tree, tests, package metadata, scripts, configuration examples, README, existing documentation, local diagnostic behavior, and recent working-tree diffs.
 
-Create a complete, locally runnable Windows application named `finviz-weekly-scanner` that:
+**Evidence hierarchy:** Verified runtime behavior and tests override source intent; source overrides scripts; scripts override examples and README; this document replaces the older one-screen build brief.
 
-1. Opens a configured Finviz screener URL once each week.
-2. Collects every ticker from every results page.
-3. Saves page screenshots for audit purposes.
-4. Validates that the number of unique extracted tickers equals the result count displayed by Finviz.
-5. Produces the complete current list in CSV, JSON, and TradingView watchlist formats.
-6. Compares the current successful run with the previous successful run.
-7. Produces separate lists of:
-   - new additions,
-   - names that dropped off,
-   - unchanged names.
-8. Treats the first successful run as the baseline and does not label the entire first list as new.
-9. Refuses to publish a partial or suspicious result.
-10. Runs unattended through Windows Task Scheduler after installation.
+**Status vocabulary:**
 
-The application must generate both:
+- `IMPLEMENTED AND VERIFIED`: code exists and automated tests or local validation exercised it.
+- `IMPLEMENTED BUT UNVERIFIED`: code exists, but no current verification was found.
+- `PARTIALLY IMPLEMENTED`: code exists but behavior is incomplete or inconsistent.
+- `KNOWN DEFECT`: behavior is wrong, unsafe, obsolete, or contradicts implemented workflows.
+- `PLANNED`: required for release but not implemented.
+- `DEPRECATED`: legacy behavior retained for compatibility.
+- `OUT OF SCOPE`: intentionally excluded.
 
-- a TradingView file for the complete current list, and
-- a TradingView file containing only the new additions.
+## 2. Executive Summary
 
----
+`finviz-weekly-scanner` is a local Windows-oriented Python application that opens one or more configured Finviz screener URLs, extracts ticker rows with Playwright and DOM parsing, resolves exchanges from a local symbol master, compares each screen with its previous successful baseline, and writes TradingView-compatible watchlist files.
 
-## 2. User environment and defaults
+The application now supports multi-screen scans with one headed browser session and separate stable watchlist files under `watchlists\`. The original single-screen `saved_screen_url` configuration remains supported as a legacy compatibility path.
 
-Build for the following default environment:
+The project is not yet release-grade. The core offline workflow is well covered by tests, but several user-visible commands and operational paths lag behind the multi-screen implementation. Most importantly, `configure` still creates only legacy single-screen configuration, `validate` and `export-tradingview` still inspect the obsolete `latest` directory, scheduled execution runs headless and cannot handle CAPTCHA, and the local console script can break if the Python 3.12 virtual environment points to a missing interpreter.
 
-- Operating system: Windows 11
-- Python: 3.12 or newer within the 3.12 series
-- Timezone: `America/Denver`
-- Weekly schedule: Saturday at 8:00 AM local time
-- Browser automation: Playwright with Chromium
-- Storage: SQLite plus dated files on the local filesystem
-- Initial notification mode: local files and logs only
-- Optional notification mode: email, disabled until configured
-- TradingView upload: manual one-click import in version 1
-- Finviz account type: free account
+## 3. Product Objective
 
-Do not hard-code a Windows username or machine-specific absolute path.
+The product objective is to provide a dependable personal watchlist-generation pipeline:
 
-Use this default data location when the user does not choose another path:
+1. Run a saved Finviz screener, or multiple named screeners.
+2. Extract all displayed symbols from all result pages.
+3. Resolve each symbol to a TradingView exchange-qualified identifier.
+4. Preserve immutable per-run snapshots and stable per-screen watchlists.
+5. Compare each screen against that same screen's previous successful result.
+6. Fail safely when extraction, validation, exchange resolution, or output publication is suspicious.
 
-```text
-C:\01.My\02.Git\finviz-weekly-scanner\Documents\FinvizWeeklyScanner
-```	
-
----
-
-## 3. Required first-run experience
-
-Implement an interactive configuration command:
-
-```powershell
-finviz-scanner configure
-```
-
-It must prompt the user for:
-
-1. Exact Finviz screener URL.
-2. Output directory, with the default shown above.
-3. Weekly run day and time, defaulting to Saturday 8:00 AM.
-4. Whether to enable OCR fallback, default `No`.
-5. Whether to enable email notification, default `No`.
-
-The command must validate that the Finviz URL:
-
-- uses HTTPS,
-- points to `finviz.com`,
-- appears to be a screener URL,
-- is not left as a placeholder.
-
-Store the resulting non-secret configuration in a user-local YAML file. Never commit the user's real URL, email credentials, cookies, or browser profile.
-
-Also generate:
-
-- `config/settings.example.yaml`
-- `.env.example`
-
-Both must contain placeholders only.
-
----
-
-## 4. Primary implementation decisions
-
-### Extraction
-
-Use direct DOM extraction as the primary method. Do not use screenshots or OCR as the primary extraction mechanism.
-
-Save one full-page screenshot per Finviz result page regardless of whether extraction succeeds.
-
-OCR may be implemented as an optional fallback, but it must be disabled by default. Any OCR-derived run must be clearly marked and must not publish outputs unless every symbol validates against the symbol master.
-
-### Pagination
-
-Finviz may display 20 companies on a page. The application must continue until all result pages are processed. It must protect against repeated-page loops and missing-page failures.
-
-### Weekly comparison
-
-Use only the latest prior run whose status is fully successful.
-
-```text
-new additions = current successful set - previous successful set
-removed names = previous successful set - current successful set
-unchanged     = intersection of both sets
-```
-
-A failed run, count-mismatched run, OCR-ambiguous run, or unresolved-exchange run must never become the comparison baseline.
-
-### TradingView output
-
-Generate comma-separated, exchange-qualified symbols, for example:
-
-```text
-NASDAQ:NVDA,NYSE:VRT,NASDAQ:APP
-```
-
-Generate these files after every successful non-baseline run:
-
-```text
-tradingview-current.txt
-tradingview-additions.txt
-current.csv
-current.json
-additions.csv
-removals.csv
-unchanged.csv
-report.md
-run.json
-```
-
-On the first successful baseline run, still generate the complete-current files. Generate an empty additions file with a clear baseline note rather than reporting all names as additions.
-
----
-
-## 5. Repository Codex must create
-
-Create a Git repository with at least the following structure. Codex may refine module names, but it must preserve separation of concerns.
-
-```text
-finviz-weekly-scanner/
-├── AGENTS.md
-├── README.md
-├── LICENSE
-├── pyproject.toml
-├── .gitignore
-├── .env.example
-├── config/
-│   ├── settings.example.yaml
-│   └── logging.yaml
-├── docs/
-│   ├── PRODUCT_SPEC.md
-│   ├── ARCHITECTURE.md
-│   ├── OPERATIONS.md
-│   ├── TROUBLESHOOTING.md
-│   └── SECURITY.md
-├── src/
-│   └── finviz_scanner/
-│       ├── __init__.py
-│       ├── cli.py
-│       ├── config.py
-│       ├── models.py
-│       ├── errors.py
-│       ├── browser/
-│       ├── extraction/
-│       ├── symbols/
-│       ├── storage/
-│       ├── comparison/
-│       ├── output/
-│       └── workflow/
-├── scripts/
-│   ├── install.ps1
-│   ├── run_scan.ps1
-│   ├── verify_installation.ps1
-│   ├── create_scheduled_task.ps1
-│   └── remove_scheduled_task.ps1
-├── tests/
-│   ├── fixtures/
-│   ├── test_extraction.py
-│   ├── test_pagination.py
-│   ├── test_validation.py
-│   ├── test_weekly_diff.py
-│   ├── test_tradingview_output.py
-│   ├── test_storage.py
-│   └── test_workflow.py
-└── .github/
-    └── workflows/
-        └── test.yml
-```
-
-Runtime data, screenshots, browser profiles, configuration containing the real URL, logs, and the SQLite database must be excluded from Git.
-
----
-
-## 6. Required CLI commands
-
-Implement these commands with clear help text and actionable errors:
-
-```powershell
-finviz-scanner configure
-finviz-scanner scan
-finviz-scanner scan --headed
-finviz-scanner validate
-finviz-scanner compare
-finviz-scanner export-tradingview
-finviz-scanner history
-finviz-scanner doctor
-finviz-scanner install-schedule
-finviz-scanner remove-schedule
-```
-
-Minimum behavior:
-
-- `configure`: create or update user-local configuration.
-- `scan`: perform the complete workflow.
-- `scan --headed`: open a visible browser for troubleshooting.
-- `validate`: validate the most recent run and generated artifacts.
-- `compare`: compare two selected successful snapshots or default to the latest two.
-- `export-tradingview`: recreate TradingView files from a successful snapshot.
-- `history`: print recent run status and additions/removals counts.
-- `doctor`: verify Python, config, Playwright, Chromium, filesystem permissions, SQLite, and scheduler prerequisites.
-- `install-schedule`: create or update the weekly Windows scheduled task.
-- `remove-schedule`: remove only the scheduled task created by this application.
-
----
-
-## 7. Reliability and safety requirements
-
-Codex must implement all of the following:
-
-1. Exact count validation for result sets under 500 symbols.
-2. No overwrite of a prior successful snapshot.
-3. Atomic publication: write into a temporary run directory, validate everything, then mark and expose it as successful.
-4. File lock or process lock to prevent overlapping runs.
-5. Maximum three attempts for temporary browser/network failures with exponential backoff.
-6. No retry for CAPTCHA, configuration, validation, or unresolved-symbol failures.
-7. Detection of CAPTCHA, login challenge, access denial, unexpected empty table, and selector breakage.
-8. No CAPTCHA bypass and no private endpoint reverse engineering.
-9. Structured logs with a unique run ID.
-10. Secret redaction in logs.
-11. Preservation of HTML and screenshots on failure for diagnosis.
-12. A nonzero process exit code on failure.
-13. A readable failure summary explaining the next manual action.
-14. UTC timestamps internally and the configured timezone for display and scheduling.
-
----
-
-## 8. Exchange resolution requirements
-
-TradingView output must use exchange-qualified symbols.
-
-Design the exchange resolver behind an interface so it can be replaced later. Prefer authoritative US symbol-directory data and cache it locally. Tests must use fixed local fixtures, not live network calls.
-
-Do not silently guess ambiguous exchange prefixes. Unresolved or ambiguous symbols must:
-
-- appear in an exception report,
-- prevent TradingView publication by default,
-- leave the previous successful snapshot untouched.
-
-Handle share classes and punctuation carefully. Provide tests for symbols containing dots or dashes and document any TradingView-specific normalization.
-
----
-
-## 9. Database and history requirements
-
-Use SQLite. Store at least:
-
-- run ID,
-- start and finish times,
-- local scheduled date,
-- status,
-- source URL fingerprint,
-- displayed result count,
-- extracted unique count,
-- page count,
-- extraction mode,
-- software version or Git commit,
-- error category and summary,
-- ticker membership for each successful run,
-- first-seen date,
-- last-seen date,
-- consecutive weeks on screen,
-- re-entry indicator where practical.
-
-Do not store browser cookies or credentials in SQLite.
-
----
-
-## 10. Tests Codex must implement and run
-
-All normal tests must run offline. Use sanitized HTML fixtures.
-
-At minimum, prove that:
-
-1. A 44-result screen across three pages yields exactly 44 unique tickers.
-2. Twenty rows on page one, twenty on page two, and four on page three are handled correctly.
-3. Two identical successful runs produce zero additions and zero removals.
-4. Two additions and one removal are calculated correctly.
-5. The first successful run is treated as a baseline.
-6. A partial page load is rejected.
-7. A displayed-count mismatch is rejected.
-8. A repeated-page loop is detected.
-9. Duplicate rows do not create duplicate output, but are logged and validated according to policy.
-10. An unresolved exchange prevents publication.
-11. A failed run does not replace the previous successful snapshot.
-12. TradingView output is one UTF-8 comma-separated line with qualified symbols.
-13. The additions-only TradingView file contains only new additions.
-14. A process lock prevents two concurrent runs.
-15. Secrets and cookies are not printed in logs.
-16. Windows scheduler command generation uses absolute paths and the configured schedule.
-
-Include an optional live integration test that is disabled by default and clearly documented.
-
----
-
-## 11. Engineering standards
-
-Use:
-
-- Python 3.12
-- Playwright
-- Typer
-- Pydantic Settings or an equivalent strongly validated configuration approach
-- SQLite through the Python standard library or a lightweight, well-justified persistence layer
-- pytest
-- Ruff
-- mypy
-
-Requirements:
-
-- Fully typed public interfaces.
-- `pathlib` for paths.
-- Specific exception classes, not broad silent exception handling.
-- Dependency injection where it materially improves testability.
-- No unfinished TODO-only functions.
-- No fake production implementation.
-- No tests that merely assert `True`.
-- No live Finviz dependency in unit tests.
-- Minimal production dependencies.
-- Clear comments only where behavior is not self-evident.
-
-Required checks before Codex claims completion:
-
-```powershell
-pytest
-ruff check .
-ruff format --check .
-mypy src
-```
-
-Codex must fix failures rather than merely report them.
-
----
-
-## 12. Windows installation requirements
-
-Create PowerShell scripts that:
-
-1. Create an isolated virtual environment.
-2. Install the package and dependencies.
-3. Install Playwright Chromium.
-4. Run `finviz-scanner doctor`.
-5. Guide the user through `finviz-scanner configure`.
-6. Run the first scan in headed mode.
-7. Create the Windows scheduled task only after a successful first scan.
-
-The scheduled task must:
-
-- run Saturday at 8:00 AM by default,
-- use the user-configured time,
-- use absolute executable and working-directory paths,
-- prevent overlapping instances,
-- write timestamped stdout and stderr logs,
-- run without an open terminal,
-- not embed passwords or secrets in task arguments.
-
-Document whether the user must be logged in, depending on the browser-profile approach selected.
-
----
-
-## 13. Documentation Codex must provide
-
-`README.md` must include beginner-friendly, exact steps for:
-
-1. Installing Python if it is absent.
-2. Running `scripts\install.ps1`.
-3. Copying the exact Finviz screener URL.
-4. Running the first headed scan.
-5. Reviewing the current, additions, and removals files.
-6. Importing `tradingview-current.txt` into TradingView.
-7. Importing `tradingview-additions.txt` when the user wants only new names.
-8. Installing and testing the weekly schedule.
-9. Reading logs after a failure.
-10. Updating selectors if Finviz changes its page structure.
-11. Uninstalling the scheduled task.
-
-Also provide architecture, operations, troubleshooting, and security documents.
-
-Create a concise repository-root `AGENTS.md` containing project rules and required checks. Keep it below Codex's default instruction-size limit. Put the full product details in `docs/PRODUCT_SPEC.md`.
-
----
-
-## 14. Codex execution procedure
-
-Codex must follow this sequence:
-
-1. Read this complete file.
-2. Restate the implementation plan and assumptions.
-3. Initialize Git if the directory is not already a repository.
-4. Create `AGENTS.md` and copy the product portion of this document into `docs/PRODUCT_SPEC.md`.
-5. Implement the offline core first: models, comparison, storage, output, validation, tests.
-6. Implement browser collection and pagination second.
-7. Implement Windows installation and scheduling third.
-8. Run every required check.
-9. Fix every failing check.
-10. Run the application doctor command.
-11. Do not claim the live scraper is verified unless a real headed scan succeeds on the user's machine.
-12. At completion, provide:
-    - files created,
-    - commands executed,
-    - test and lint results,
-    - assumptions,
-    - remaining manual configuration,
-    - exact next commands for the user.
-
-Do not stop after generating a skeleton. Build the working application and tests.
-
----
-
-## 15. Initial command the user will send to Codex
-
-The user will place this file in an empty project directory and send:
-
-```text
-Read CODEX_BUILD_REQUEST.md completely. Build the application described in it in this project directory. Work in stages, run all required tests and quality checks, fix failures, and do not claim completion until the offline acceptance tests pass. Do not ask me for the Finviz URL during code generation; implement the configure command so I can enter it after the application is built.
-```
-
----
-
-# Authoritative Product and Technical Specification
-
-# Finviz Weekly Stage-2 Scanner — Product and Technical Specification
-
-**Version:** 1.0  
-**Purpose:** Automatically collect a saved Finviz screener result each week, generate a TradingView-importable watchlist, and report additions and removals compared with the prior week.
-
----
-
-## 1. Executive decision
-
-The application should **not use screenshot OCR as its primary extraction method**. It should open the saved Finviz screener in a browser and extract ticker rows from the page's HTML/DOM. Screenshot capture and OCR should be retained only as a fallback and audit artifact.
-
-Reasons:
-
-- DOM extraction is materially more accurate than OCR for short ticker symbols.
-- OCR can confuse `O/0`, `I/1`, punctuation, share classes, and exchange labels.
-- DOM extraction can reliably paginate through all result pages.
-- Screenshots can still be stored to prove what the page displayed during each run.
-
-For the most stable and supported implementation, use Finviz's paid export/API capability. A free-account/browser-automation implementation is feasible for a weekly personal workflow, but it remains dependent on page structure, login state, anti-bot controls, and Finviz's permitted-use rules.
-
----
-
-## 2. Business objective
-
-Every week, after the US market closes:
-
-1. Open the configured Finviz Stage-2 screener.
-2. Retrieve every matching company from all pages.
-3. Normalize symbols and resolve the listing exchange.
-4. Save a dated snapshot.
-5. Compare it with the most recent successful prior snapshot.
-6. Produce:
-   - Current full list
-   - New additions
-   - Deletions / stocks falling off the screen
-   - TradingView import file
-   - Human-readable weekly report
-7. Deliver the files and summary automatically.
-
----
-
-## 3. Assumed screener filters
-
-The screenshot appears to contain nine active filters. Store the saved Finviz screener URL as the source of truth rather than re-creating the filter parameters in code.
-
-| Category | Filter | Assumed value |
-|---|---|---|
-| Descriptive | Market capitalization | Small or larger, likely over $300M |
-| Descriptive | Average volume | Over 2M shares |
-| Descriptive | Price | Over $30 |
-| Technical | Quarterly performance | +20% or greater |
-| Technical | 20-day SMA | SMA20 above SMA50 |
-| Technical | 50-day SMA | SMA50 above SMA200 |
-| Technical | 200-day SMA | Price above SMA200 |
-| Technical | 52-week high/low | 0–10% below 52-week high |
-| Technical | Average True Range | Over 2 |
-
-**Configuration requirement:** The application must store the exact saved-screen URL copied from the browser after the filters are confirmed. This avoids ambiguity in truncated dropdown labels.
-
----
+Current release posture: **PARTIALLY IMPLEMENTED**.
 
 ## 4. Scope
 
-### In scope
+In scope:
 
-- Weekly scheduled execution
-- Finviz saved-screen navigation
-- Multi-page extraction, including 20 rows per page
-- Extraction of ticker and optional company metadata
-- Exchange resolution
-- Historical snapshots
-- Add/remove comparison
-- TradingView `.txt` output
-- CSV and JSON output
-- Email or local notification
-- Run logs, screenshots, and failure alerts
+- Windows local use.
+- Python 3.12 package with Typer CLI.
+- Playwright Chromium browser automation.
+- Finviz screener DOM extraction.
+- Multi-screen sequential scans.
+- Local SQLite history.
+- Local filesystem snapshots and TradingView `.txt` files.
+- Windows Task Scheduler command generation and scripts.
+- Symbol-master generation from Nasdaq Trader files.
+- Offline tests.
 
-### Out of scope for version 1
+Out of current reliable scope:
 
-- Placing trades
-- Automatically modifying brokerage accounts
-- Fundamental analysis of candidates
-- Buy/sell recommendations
-- Intraday scanning
-- Guaranteed unattended bypass of CAPTCHA, MFA, or site redesigns
-- Unsupported direct calls to private Finviz or TradingView endpoints
+- Guaranteed unattended Finviz access.
+- CAPTCHA solving or bypass.
+- TradingView web upload automation.
+- Email notification delivery.
+- OCR fallback publication.
+- Cloud synchronization.
+- Brokerage or trading actions.
 
----
+## 5. Non-Goals
 
-## 5. Recommended architecture
+- Do not bypass Finviz CAPTCHA, access challenges, rate limits, or anti-automation systems.
+- Do not reverse engineer private Finviz or TradingView endpoints.
+- Do not store browser cookies, credentials, or user secrets in SQLite or manifests.
+- Do not silently guess exchanges for unknown tickers.
+- Do not deduplicate symbols across different configured screens.
+- Do not present scheduled unattended scans as dependable when Finviz may require human verification.
+
+## 6. User Personas
+
+- **Personal trader/investor:** wants TradingView-importable watchlists generated from repeatable Finviz screeners.
+- **Operator/troubleshooter:** runs headed scans, solves Finviz verification manually when necessary, and inspects diagnostics.
+- **Maintainer/developer:** updates selectors, fixes operational defects, and extends storage or output behavior.
+
+## 7. Supported Workflows
+
+### WF-1 Clean setup
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+Lifecycle:
+
+`installation -> configuration -> symbol-master placement or refresh -> doctor -> first headed scan -> stable watchlist import -> optional schedule`
+
+Implementation evidence:
+
+- `scripts\install.ps1` creates `.venv`, installs `.[dev]`, installs Chromium, then runs `finviz-scanner doctor`.
+- `finviz-scanner configure` creates a legacy one-screen config only.
+- `finviz-scanner refresh-symbol-master` downloads and validates Nasdaq Trader symbol data.
+
+Known gap: install script assumes `py -3.12`; if Python 3.12 is absent or moved, generated entry points fail.
+
+### WF-2 Single-screen scan
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+`finviz.saved_screen_url` is converted internally to screen `default`. `scan --headed` collects the screen, validates counts, resolves exchanges, writes a snapshot, updates SQLite, and writes `watchlists\default.txt`.
+
+### WF-3 Multi-screen scan
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+`finviz.screens` supports multiple named screens. `scan --headed` processes all enabled screens sequentially in one browser context. Each successful screen publishes independently.
+
+### WF-4 Scheduled scan
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+Task creation exists, but the task runs `scan` without `--headed`. Headless Finviz scans are vulnerable to human-verification challenges and should be treated as experimental.
+
+## 8. System Context
+
+External systems:
+
+- Finviz public website: screener pages and dynamic DOM.
+- Nasdaq Trader symbol directory: `nasdaqlisted.txt` and `otherlisted.txt`.
+- TradingView: manual import of generated watchlist files.
+- Windows Task Scheduler: optional weekly execution.
+- Local filesystem: configuration, snapshots, diagnostics, SQLite, symbol master.
+- Playwright Chromium: browser execution.
+
+Security assumptions:
+
+- User owns the configured Finviz URL.
+- Runtime data stays on the user's machine unless the user syncs it externally.
+- No credentials or cookies are required by the current code.
+
+## 9. Architecture
 
 ```mermaid
 flowchart LR
-    A[Weekly Scheduler] --> B[Browser Runner]
-    B --> C[Finviz Saved Screen]
-    C --> D[DOM Extractor and Paginator]
-    D --> E[Validation and Normalization]
-    E --> F[Exchange Resolver]
-    F --> G[Current Snapshot]
-    G --> H[Snapshot Comparator]
-    H --> I[TradingView TXT]
-    H --> J[CSV and JSON]
-    H --> K[Weekly HTML or Markdown Report]
-    I --> L[Email / Cloud Folder / Notification]
-    J --> L
-    K --> L
-    D --> M[Audit Screenshots]
-    B --> N[Failure Alert]
+    CLI["Typer CLI"] --> CFG["Pydantic Settings"]
+    CLI --> WF["Workflow Runner"]
+    WF --> BR["Playwright Browser Collector"]
+    BR --> FV["Finviz Screener Pages"]
+    BR --> EXT["DOM Extractor"]
+    EXT --> VAL["Extraction Validation"]
+    VAL --> SYM["Symbol Resolver"]
+    SYM --> CMP["Snapshot Comparator"]
+    CMP --> OUT["Artifact Writer"]
+    OUT --> FS["Snapshots and Watchlists"]
+    OUT --> DB["SQLite History"]
+    CLI --> DOC["Doctor and Scheduler"]
 ```
 
----
+Key architectural decision: browser collection is screen-source-specific, while validation, exchange resolution, comparison, and output generation are reusable watchlist pipeline components.
 
-## 6. Components
+## 10. Component Responsibilities
 
-### 6.1 Scheduler
+- `src\finviz_scanner\cli.py`: CLI commands, command exit codes, user console output.
+- `src\finviz_scanner\config.py`: YAML loading and Pydantic validation.
+- `src\finviz_scanner\browser\finviz_browser.py`: Playwright lifecycle, navigation, pagination, screenshots, HTML capture.
+- `src\finviz_scanner\browser\readiness.py`: Finviz readiness detection, CAPTCHA/challenge detection, diagnostics.
+- `src\finviz_scanner\extraction\finviz_dom.py`: ticker-link parsing, total parsing, duplicate detection, blocker text detection.
+- `src\finviz_scanner\symbols\resolver.py`: symbol-master CSV loading and exchange qualification.
+- `src\finviz_scanner\symbols\master_builder.py`: Nasdaq Trader download, parsing, validation, atomic symbol-master refresh.
+- `src\finviz_scanner\workflow\multi_screen_runner.py`: multi-screen orchestration, failure isolation, per-screen publication, manifest writing.
+- `src\finviz_scanner\workflow\runner.py`: legacy single-screen workflow retained for tests/compatibility.
+- `src\finviz_scanner\storage\sqlite.py`: run and membership persistence.
+- `src\finviz_scanner\output\artifacts.py`: CSV, JSON, report, and TradingView text generation.
+- `src\finviz_scanner\scheduler.py`: Windows Task Scheduler command construction.
 
-Run once each week after Friday's US market close.
+## 11. CLI Contract
 
-Recommended default:
+### `finviz-scanner configure`
 
-- Time zone: `America/Denver`
-- Schedule: Saturday at 08:00 local time
-- Retry: two retries, 15 minutes apart
-- No duplicate successful run for the same ISO week
+Status: **PARTIALLY IMPLEMENTED**.
 
-The schedule must be configurable.
+Syntax:
 
-### 6.2 Browser runner
-
-Recommended technology: **Python + Playwright + Chromium**.
-
-Responsibilities:
-
-- Start a persistent browser profile.
-- Load cookies/session state when necessary.
-- Navigate to the exact configured saved-screen URL.
-- Wait until result rows and the result count are visible.
-- Dismiss harmless overlays only through stable selectors.
-- Save one full-page screenshot per results page.
-- Pass page content to the extractor.
-
-Browser characteristics:
-
-- Headed mode during installation and troubleshooting
-- Headless mode for normal scheduled runs
-- Fixed viewport and zoom for repeatability
-- Realistic but slow request rate
-- No concurrent page scraping
-
-### 6.3 Finviz extractor
-
-Primary method: parse the visible result table and ticker links from the DOM.
-
-Required fields:
-
-- `ticker`
-- `company_name`, when displayed
-- `finviz_rank`, when displayed
-- `source_page`
-- `source_url`
-- `captured_at`
-
-Optional fields:
-
-- Sector
-- Industry
-- Country
-- Market cap
-- Price
-- Volume
-- Performance
-
-Extraction rules:
-
-1. Read the displayed total result count.
-2. Extract every row on the current page.
-3. Follow the visible **Next** control until it is disabled or absent.
-4. Stop when:
-   - no next page exists, or
-   - all expected rows have been collected, or
-   - a repeated page signature is detected.
-5. De-duplicate by normalized ticker.
-6. Validate that the extracted count equals the displayed total.
-7. Mark the run as failed if the discrepancy exceeds the configured tolerance.
-
-Default tolerance: zero missing rows for result sets under 500 symbols.
-
-### 6.4 OCR fallback
-
-OCR should run only when DOM extraction fails and screenshots were captured successfully.
-
-Fallback process:
-
-1. Crop the ticker column from each page screenshot.
-2. Run OCR locally.
-3. Normalize text to uppercase.
-4. Match candidates against a current US-listed symbol directory.
-5. Reject ambiguous or unmatched values.
-6. Do not publish a TradingView file unless every OCR ticker passes validation.
-7. Flag the run as `DEGRADED_OCR` in the report.
-
-### 6.5 Exchange resolver
-
-TradingView watchlists should use exchange-qualified symbols such as:
-
-```text
-NASDAQ:NVDA,NYSE:VRT,NASDAQ:APP
+```powershell
+finviz-scanner configure
 ```
 
-Resolve exchanges using an authoritative daily symbol master. Suggested inputs:
+Prompts for exact Finviz URL, output directory, weekly day, weekly time, OCR fallback, and email notification.
 
-- Nasdaq-listed securities directory
-- Other-exchange-listed securities directory
+Reads: none required.
 
-Canonical exchange mapping should be configurable, for example:
+Writes: `%LOCALAPPDATA%\finviz-weekly-scanner\settings.yaml`.
 
-| Source code | TradingView prefix |
-|---|---|
-| Nasdaq-listed | `NASDAQ` |
-| N / NYSE | `NYSE` |
-| A / NYSE American | `AMEX` |
-| P / NYSE Arca | `AMEX` or configured TradingView-compatible prefix |
-| Z / Cboe | configured TradingView-compatible prefix |
+Current behavior: writes `finviz.saved_screen_url`, not `finviz.screens`.
 
-Because TradingView symbol conventions may differ for some classes, ETFs, and special securities, unresolved symbols must be placed in an exception file rather than silently guessed.
+Known defect: no interactive way to configure multiple screens.
 
-### 6.6 Snapshot repository
+### `finviz-scanner scan`
 
-Directory structure:
+Status: **IMPLEMENTED AND VERIFIED**.
 
-```text
-data/
-  snapshots/
-    2026-07-04/
-      finviz_raw.json
-      normalized.csv
-      tradingview.txt
-      additions.csv
-      removals.csv
-      unchanged.csv
-      report.md
-      page-01.png
-      page-02.png
-      page-03.png
-      run.json
-  latest/
-    normalized.csv
-    tradingview.txt
-    report.md
+Syntax:
+
+```powershell
+finviz-scanner scan [--headed] [--screen SCREEN_ID]... [--include-disabled]
 ```
 
-Storage options:
+Default behavior: loads config, scans all enabled screens, writes snapshots and stable watchlists.
 
-- Local directory for MVP
-- OneDrive, Google Drive, Dropbox, S3, or Git repository for backup
-- SQLite database for searchable history
+Exit behavior:
 
-### 6.7 Comparator
+- `0`: all selected screens succeeded.
+- `1`: configuration error, all screens failed, or scanner error before safe publication.
+- `2`: partial success.
 
-Let:
+Common failures: missing config, missing symbol master, Finviz challenge, selector breakage, count mismatch, unresolved symbol, browser launch failure.
 
-- `C` = current normalized symbol set
-- `P` = previous successful normalized symbol set
+### `finviz-scanner list-screens`
 
-Then:
+Status: **IMPLEMENTED AND VERIFIED**.
 
-```text
-additions = C - P
-removals  = P - C
-unchanged = C ∩ P
+Syntax:
+
+```powershell
+finviz-scanner list-screens [--show-urls]
 ```
 
-The first successful run is a baseline. It should report every symbol as current but should not label all symbols as new additions unless explicitly configured.
+Default output hides URLs. `--show-urls` prints configured URLs.
 
-Additional optional metrics:
+### `finviz-scanner validate`
 
-- Weeks continuously on screen
-- First-seen date
-- Last-seen date
-- Re-entry after prior removal
-- Consecutive-week count
-- Rank movement, if rank is available
+Status: **KNOWN DEFECT**.
 
-### 6.8 Output generator
+Current behavior checks `latest\current.csv`, `latest\tradingview-current.txt`, and other legacy single-screen artifacts.
 
-Generate the following artifacts after every successful run.
+Conflict: multi-screen scans no longer maintain `latest`. This command must be redesigned for `snapshots\<run-id>\manifest.json` and per-screen directories.
 
-#### TradingView file
+### `finviz-scanner compare`
 
-Filename:
+Status: **PARTIALLY IMPLEMENTED**.
+
+Current behavior prints latest two successful rows from SQLite. It does not display additions/removals and is not screen-aware.
+
+### `finviz-scanner export-tradingview`
+
+Status: **KNOWN DEFECT**.
+
+Current behavior calls legacy `validate` and reports that TradingView files are available in `latest`. It does not recreate multi-screen watchlists.
+
+### `finviz-scanner history`
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+Prints recent SQLite runs with start time, status, run ID, displayed count, and extracted count. It does not group by screen or show partial run summaries.
+
+### `finviz-scanner doctor`
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+Checks Python version display, config loading, Playwright import, Chromium executable, output directory writability, SQLite creation, symbol-master existence/validity, usable row count, and blank ticker/exchange values.
+
+Known defect: write-permission probe raises an unhandled `PermissionError` under restricted filesystem conditions instead of returning a concise diagnostic.
+
+### `finviz-scanner refresh-symbol-master`
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+Downloads Nasdaq Trader source files, builds a temporary symbol master, validates it, atomically replaces `symbol-master.csv`, and reports loaded/skipped/duplicated/invalid counts.
+
+### `finviz-scanner install-schedule`
+
+Status: **IMPLEMENTED BUT UNVERIFIED**.
+
+Creates/replaces a Windows task using `schtasks /Create`. Uses configured day/time.
+
+### `finviz-scanner remove-schedule`
+
+Status: **IMPLEMENTED BUT UNVERIFIED**.
+
+Deletes task `FinvizWeeklyScanner`.
+
+## 12. Configuration Contract
+
+Configuration file:
 
 ```text
-stage2_YYYY-MM-DD_tradingview.txt
+%LOCALAPPDATA%\finviz-weekly-scanner\settings.yaml
 ```
 
-Format:
+Main model: `Settings`.
+
+Required top-level section: `finviz`.
+
+Supported Finviz forms:
+
+```yaml
+finviz:
+  saved_screen_url: "https://finviz.com/screener?..."
+```
+
+or:
+
+```yaml
+finviz:
+  screens:
+    - id: stage-2
+      name: Stage 2 Candidates
+      url: "https://finviz.com/screener?..."
+      enabled: true
+      tradingview_filename: "stage-2.txt"
+  delay_between_screens_ms: 1000
+```
+
+Rules:
+
+- If `screens` is present, `saved_screen_url` must not be present.
+- If neither is present, configuration is invalid.
+- URLs must use HTTPS, host `finviz.com` or `www.finviz.com`, path `/screener` or `/screener.ashx`, and not contain placeholder markers.
+- Output root defaults to `Path.cwd() / "Documents" / "FinvizWeeklyScanner"` at runtime, not a fixed user path.
+
+## 13. Screen-Definition Contract
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+Each configured screen requires:
+
+- `id`: stable identifier.
+- `name`: human-readable name.
+- `url`: Finviz screener URL.
+- `enabled`: optional, defaults to `true`.
+- `tradingview_filename`: optional basename; defaults to `<screen-id>.txt`.
+
+ID validation:
 
 ```text
-NASDAQ:NVDA,NYSE:VRT,NASDAQ:APP
+^[a-z0-9][a-z0-9_-]{0,49}$
+```
+
+IDs are case-insensitively unique. Output filenames are case-insensitively unique and must be basenames only.
+
+Execution order is configuration order. Requested screens are filtered but still processed in configuration order.
+
+Disabled screens are skipped unless explicitly requested with `--include-disabled`.
+
+## 14. Finviz Integration
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+Navigation:
+
+- `page.goto(url, wait_until="domcontentloaded", timeout=60000)`.
+- Does not use `networkidle`.
+- Validates final hostname is Finviz.
+- Logs navigation start, DOM content loaded, status, final URL, and title.
+
+Readiness:
+
+- Primary selectors:
+  - `td[data-boxover-ticker] > a.tab-link[href^="stock?t="]`
+  - `td[data-boxover-ticker] > a.tab-link`
+  - `a[href*="quote.ashx?t="]`
+- Readiness succeeds when ticker links are detected.
+- Blocker text such as CAPTCHA, unusual traffic, challenge, rate limit, "Just a moment", security verification, and "not a bot" raises `CaptchaError`.
+
+Known limitation: legitimate zero-result screens are recognized but currently fail with `ExtractionError("Finviz explicitly reported zero results.")`. Release requirements must decide whether zero-result screens should publish empty watchlists.
+
+## 15. Browser Automation
+
+Status: **IMPLEMENTED AND VERIFIED for headed and offline mocked paths; headless live reliability is limited**.
+
+Playwright behavior:
+
+- Launches Chromium with `headless=not headed`.
+- Creates one browser context and one page for `collect_many`.
+- Reuses the page sequentially for all screens.
+- Saves screenshots to `working\screenshots\<screen-id>\page-NN.png`.
+- Saves HTML to `working\html\<screen-id>\page-NN.html`.
+- Handles current page-select pagination and legacy "Next" pagination.
+- Detects repeated page signatures.
+
+Diagnostics on readiness failure:
+
+- `failure-page.png`
+- `failure-page.html`
+- `failure-metadata.json`
+
+Unattended automation is **not dependable** when Finviz presents human verification. Headed mode allows the user to complete verification manually; headless mode cannot.
+
+## 16. Symbol Normalization
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+Symbol master location:
+
+```text
+<output.root_directory>\symbol-master.csv
+```
+
+Required headers exactly after normalization:
+
+```text
+ticker,exchange
+```
+
+CSV handling:
+
+- Opens with `encoding="utf-8-sig"` for BOM safety.
+- Normalizes headers by stripping whitespace and lowercasing.
+- Rejects missing or extra headers with `SymbolMasterValidationError`.
+- Tracks blank ticker/exchange rows for doctor validation.
+
+Ticker normalization:
+
+- Uppercases.
+- Converts `/` to `.`.
+- Removes whitespace.
+- Accepts `[A-Z0-9][A-Z0-9.-]{0,14}`.
+- Does not accept `=` or `+`.
+
+Exchange mapping:
+
+- `Q`, `NASDAQ` -> `NASDAQ`
+- `N`, `NYSE` -> `NYSE`
+- `A`, `AMEX` -> `AMEX`
+- `P` -> `AMEX`
+- `Z`, `BATS` -> `BATS`
+
+Unknown extracted tickers raise `ExchangeResolutionError` and prevent publication.
+
+## 17. Persistence Model
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+SQLite database:
+
+```text
+<output.root_directory>\scanner.sqlite3
+```
+
+Tables:
+
+- `runs`: run metadata, status, counts, error summary, optional `screen_id`.
+- `screen_membership`: legacy global membership.
+- `screen_symbol_membership`: multi-screen membership keyed by `(run_id, screen_id, ticker)`.
+
+Multi-screen run IDs are stored as `<run-id>:<screen-id>` in SQLite. Filesystem snapshots use root `<run-id>` plus screen subdirectories.
+
+Known gaps:
+
+- No explicit database transaction spanning file publication and SQLite update.
+- Failed screen records are stored, but failed data is not a comparison baseline.
+- No retention cleanup policy.
+- `first_seen`, `last_seen`, re-entry, and consecutive-week fields exist but are not fully computed.
+
+## 18. Successful-Run Semantics
+
+For a screen to be successful:
+
+1. Finviz pages are collected.
+2. Blockers are absent.
+3. Displayed total is parsed.
+4. Extracted unique ticker count equals displayed total when exact validation is enabled.
+5. All extracted tickers resolve to known exchanges.
+6. Outputs are written.
+7. Stable watchlist is atomically replaced.
+8. SQLite run status is `SUCCESS`.
+
+Failed screens must not replace stable watchlist files and must not become comparison baselines.
+
+Multi-screen run status:
+
+- `success`: every selected screen succeeded.
+- `partial_success`: at least one screen succeeded and at least one failed or was not attempted.
+- `failed`: no selected screen succeeded.
+
+## 19. Snapshot Comparison
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+Algorithm:
+
+```text
+current_by_ticker = current symbols keyed by normalized ticker
+previous_by_ticker = previous symbols keyed by normalized ticker
+additions = sorted(current - previous)
+removals = sorted(previous - current)
+unchanged = sorted(current intersection previous)
+```
+
+First successful screen run is baseline:
+
+- `additions=()`
+- `removals=()`
+- `unchanged=()`
+- `is_baseline=True`
+
+Multi-screen comparison is isolated by `screen_id`.
+
+## 20. Output-File Contracts
+
+Per-screen snapshot directory:
+
+```text
+<root>\snapshots\<run-id>\<screen-id>\
+```
+
+Files written for each successful screen:
+
+- `current.csv`
+- `additions.csv`
+- `removals.csv`
+- `unchanged.csv`
+- `current.json`
+- `tradingview-current.txt`
+- `tradingview-additions.txt`
+- `tradingview-watchlist.txt`
+- `additions.txt`
+- `removals.txt`
+- `tickers.csv`
+- `metadata.json`
+- `report.md`
+- `run.json`
+
+Run manifest:
+
+```text
+<root>\snapshots\<run-id>\manifest.json
+```
+
+Stable TradingView directory:
+
+```text
+<root>\watchlists\
+```
+
+Stable files:
+
+```text
+<root>\watchlists\<screen-id>.txt
+```
+
+or configured `tradingview_filename`.
+
+## 21. TradingView Integration
+
+Status: **IMPLEMENTED AND VERIFIED for file generation; OUT OF SCOPE for automated upload**.
+
+TradingView files are UTF-8 text containing one comma-separated line of exchange-qualified symbols, sorted by Finviz rank:
+
+```text
+NASDAQ:AAPL,NYSE:STT,NASDAQ:NVDA
+```
+
+The full stable watchlist for a screen is overwritten atomically on every successful scan of that screen. Historical full watchlists, additions, removals, CSVs, JSON, reports, and metadata remain in immutable snapshot directories.
+
+Additions-only file behavior:
+
+- Snapshot `tradingview-additions.txt` contains only additions.
+- On baseline runs it includes a baseline note before an empty line.
+- Multi-screen alias `additions.txt` contains only the comma-separated additions line and no baseline note.
+
+Removals are retained in CSV and `removals.txt`; TradingView usually imports current or additions, not removals.
+
+## 22. Logging And Diagnostics
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+Implemented:
+
+- Browser readiness logs with navigation and page-ready details.
+- Screen ID included in many browser logs.
+- Failure diagnostics HTML, PNG, and JSON.
+- Secret redaction utility with tests.
+
+Known gaps:
+
+- No central structured logging configuration is enforced by CLI.
+- Run ID is not consistently included in every log record.
+- Failure diagnostics for multiple screen failures can overwrite root `working\failure-*` files.
+
+## 23. Installation
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+Clean Windows installation:
+
+```powershell
+py -3.12 --version
+scripts\install.ps1
+finviz-scanner configure
+finviz-scanner refresh-symbol-master
+finviz-scanner doctor
+finviz-scanner scan --headed
 ```
 
 Requirements:
 
-- UTF-8 text
-- One comma-separated line
-- Exchange prefix included
-- No duplicate symbols
-- Deterministic sorting, preferably by Finviz order or alphabetically
+- Python `>=3.12,<3.13`.
+- `py -3.12` launcher available.
+- Network access for pip, Playwright Chromium, Nasdaq Trader symbol refresh, and Finviz live scans.
+- Writable output root.
 
-#### CSV files
+Known environment defect observed locally: default `python` was 3.14.3 and `python -m pip install -e .` failed because the package requires `<3.13`; the existing `.venv\Scripts\finviz-scanner.exe` pointed at a missing Python 3.12 path. Recreate `.venv` with a valid Python 3.12 install.
 
-`current.csv`
+## 24. Upgrade And Uninstall
 
-```csv
-ticker,exchange,tv_symbol,company_name,first_seen,last_seen,weeks_on_list,finviz_rank
-NVDA,NASDAQ,NASDAQ:NVDA,NVIDIA Corp,2026-06-20,2026-07-04,3,1
+Upgrade:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\finviz-scanner.exe doctor
 ```
 
-`additions.csv` and `removals.csv` should use the same schema.
+Uninstall scheduled task:
 
-#### Weekly report
+```powershell
+finviz-scanner remove-schedule
+```
 
-Example:
+Manual cleanup:
+
+- Delete `.venv` if removing local install.
+- Delete `%LOCALAPPDATA%\finviz-weekly-scanner\settings.yaml` only if removing user config.
+- Delete output root only if historical snapshots/watchlists are no longer needed.
+
+## 25. Windows Task Scheduler
+
+Status: **PARTIALLY IMPLEMENTED**.
+
+CLI scheduler uses:
 
 ```text
-Stage-2 Weekly Scan — 2026-07-04
-
-Current matches: 44
-New additions: 6
-Fell off: 4
-Unchanged: 38
-
-New additions
-- NASDAQ:ABCD
-- NYSE:EFGH
-
-Fell off
-- NASDAQ:IJKL
-- NYSE:MNOP
-
-TradingView file: stage2_2026-07-04_tradingview.txt
-Run status: SUCCESS
+schtasks /Create /TN FinvizWeeklyScanner /SC WEEKLY /D <DAY> /ST <TIME> /TR <absolute powershell run_scan.ps1 command> /F
 ```
 
----
+Script scheduler uses similar `schtasks` construction.
 
-## 7. TradingView integration
+`scripts\run_scan.ps1`:
 
-### Supported baseline
+- Creates logs directory.
+- Writes timestamped stdout/stderr logs.
+- Runs `.venv\Scripts\finviz-scanner.exe scan`.
+- Uses hidden window.
 
-The application generates a TradingView-compatible `.txt` watchlist. The user uploads it through TradingView's watchlist menu.
+Limitations:
 
-### Optional zero-touch adapter
+- Scheduled task is headless by default.
+- CAPTCHA/human verification cannot be completed unattended.
+- No explicit "run only when user is logged on" policy is encoded.
+- No preflight preventing schedule creation before first successful headed scan.
 
-A separate Playwright adapter may automate the TradingView web interface:
+## 26. Error Taxonomy
 
-1. Open TradingView with a persistent logged-in profile.
-2. Open the target watchlist menu.
-3. Choose the upload-list action.
-4. Upload the newly generated `.txt` file.
-5. Confirm the resulting symbol count.
-6. Save a screenshot.
+Implemented exception classes:
 
-This adapter must be feature-flagged and disabled by default because UI automation is brittle and may be affected by authentication, MFA, dialogs, plan restrictions, or interface changes.
+- `ScannerError`
+- `ConfigurationError`
+- `SymbolMasterValidationError`
+- `ExtractionError`
+- `CaptchaError`
+- `ValidationError`
+- `ExchangeResolutionError`
+- `StorageError`
+- `LockError`
 
-Recommended default: automate everything through file creation and delivery, but keep TradingView import as a one-click manual action.
+Release requirement: every CLI command should catch expected exceptions and return concise actionable messages without rich tracebacks. `doctor` currently violates this for filesystem permission errors.
 
----
+## 27. Recovery Procedures
 
-## 8. Functional requirements
+- Missing config: run `finviz-scanner configure`.
+- Need multi-screen config: edit `%LOCALAPPDATA%\finviz-weekly-scanner\settings.yaml` manually until `configure` supports screens.
+- Missing symbol master: run `finviz-scanner refresh-symbol-master`.
+- Invalid symbol master headers: ensure CSV headers normalize exactly to `ticker,exchange`; BOM is supported.
+- CAPTCHA/challenge: run `finviz-scanner scan --headed`, complete verification manually, then rerun.
+- Selector failure: inspect `working\failure-page.html`, `failure-page.png`, and `failure-metadata.json`; update selectors and fixtures.
+- Unresolved exchange: refresh symbol master; if still unresolved, investigate ticker syntax or source data.
+- Broken `.venv`: reinstall Python 3.12 and recreate `.venv`.
+- Permission denied on output root: choose a writable output root or fix ACLs.
 
-### FR-1: Configurable screener source
+## 28. Security And Privacy Considerations
 
-The application shall accept the exact saved Finviz screener URL through configuration.
+Status: **PARTIALLY IMPLEMENTED**.
 
-### FR-2: Complete pagination
+Implemented:
 
-The application shall retrieve all result pages until the total displayed count is satisfied.
-
-### FR-3: Exact-count validation
-
-The application shall compare the displayed result count with the number of unique extracted tickers.
-
-### FR-4: Snapshot persistence
-
-The application shall never overwrite a historical dated snapshot.
-
-### FR-5: Weekly comparison
-
-The application shall compare the current run only with the latest prior **successful** run.
-
-### FR-6: TradingView output
-
-The application shall generate a UTF-8 `.txt` file containing comma-separated, exchange-qualified TradingView symbols.
-
-### FR-7: Additions and removals
-
-The application shall generate separate lists for additions, removals, and unchanged symbols.
-
-### FR-8: Notification
-
-The application shall send a success summary with files or links after a valid run.
-
-### FR-9: Failure notification
-
-The application shall send an alert when extraction, count validation, exchange resolution, or file generation fails.
-
-### FR-10: Audit evidence
-
-The application shall store page screenshots, source URL, run time, row count, hashes, and software version.
-
----
-
-## 9. Non-functional requirements
-
-### Reliability
-
-- Target successful scheduled run rate: 95% or higher, excluding third-party outages and CAPTCHA/MFA blocks.
-- No report shall be published from a partial result set.
-- Retries must be idempotent.
-
-### Accuracy
-
-- Ticker extraction precision: 100% for DOM mode.
-- All TradingView symbols must resolve to a known exchange or be placed in exceptions.
-- Zero silent symbol substitution.
-
-### Performance
-
-- Complete a 1–10 page screen in under five minutes under normal conditions.
-- Rate-limit page changes to avoid aggressive access.
-
-### Security
-
-- Credentials and cookies must not be committed to source control.
-- Use OS keychain, encrypted secret store, or protected environment variables.
-- Restrict screenshots and logs to the user's machine or private storage.
-
-### Maintainability
-
-- Selectors must be isolated in one adapter module.
-- Page-layout changes should require changes only to the Finviz adapter.
-- Core comparison and output logic must be independent of Finviz.
-
-### Observability
-
-Each run must log:
-
-- Start and finish time
-- URL
-- Browser version
-- Page count
-- Displayed result count
-- Extracted result count
-- Duplicate count
-- Unresolved exchange count
-- Additions/removals count
-- Final status
-- Error stack trace, when applicable
-
----
-
-## 10. Configuration example
-
-```yaml
-app:
-  name: finviz-stage2-weekly
-  timezone: America/Denver
-
-schedule:
-  day: saturday
-  time: "08:00"
-  retries: 2
-  retry_delay_minutes: 15
-
-finviz:
-  saved_screen_url: "COPY_EXACT_SAVED_SCREEN_URL_HERE"
-  expected_page_size: 20
-  browser_headless: true
-  save_screenshots: true
-  extraction_mode: dom
-  allow_ocr_fallback: true
-
-validation:
-  require_exact_count: true
-  fail_on_unresolved_exchange: true
-  fail_on_duplicate_ticker: false
-
-output:
-  root_directory: ./data
-  tradingview_sort: finviz_rank
-  generate_csv: true
-  generate_json: true
-  generate_markdown_report: true
-
-notification:
-  provider: email
-  recipients:
-    - user@example.com
-  attach_tradingview_file: true
-  attach_report: true
-
-tradingview:
-  automated_upload_enabled: false
-  target_watchlist_name: Stage 2 Weekly
-```
-
----
-
-## 11. Suggested data model
-
-### `runs`
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | UUID | Unique run identifier |
-| `scheduled_for` | datetime | Intended run time |
-| `started_at` | datetime | Actual start |
-| `finished_at` | datetime | Actual finish |
-| `status` | enum | SUCCESS, FAILED, DEGRADED_OCR |
-| `source_url` | text | Saved-screen URL |
-| `displayed_count` | integer | Finviz result count |
-| `extracted_count` | integer | Unique extracted count |
-| `page_count` | integer | Pages processed |
-| `error_message` | text | Failure summary |
-| `software_version` | text | Git commit or package version |
-
-### `screen_membership`
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | UUID | Parent run |
-| `ticker` | text | Normalized ticker |
-| `exchange` | text | Canonical exchange |
-| `tv_symbol` | text | TradingView identifier |
-| `company_name` | text | Company name |
-| `finviz_rank` | integer | Display order |
-| `source_page` | integer | Page number |
-| `first_seen` | date | Earliest successful appearance |
-| `last_seen` | date | Latest appearance |
-| `consecutive_weeks` | integer | Consecutive membership count |
-
-Primary key: `(run_id, ticker)`.
-
----
-
-## 12. Processing algorithm
-
-```python
-def weekly_run(config):
-    run = start_run()
-
-    try:
-        pages = open_finviz_and_capture_all_pages(config.finviz.saved_screen_url)
-        displayed_total = pages.displayed_total
-
-        raw_rows = extract_rows_from_dom(pages)
-        rows = normalize_and_deduplicate(raw_rows)
-
-        assert len(rows) == displayed_total
-
-        symbol_master = load_current_us_symbol_master()
-        rows = resolve_exchanges(rows, symbol_master)
-        assert no_unresolved_symbols(rows)
-
-        previous = load_latest_successful_snapshot()
-        comparison = compare(previous, rows)
-
-        artifacts = generate_outputs(rows, comparison)
-        persist_snapshot(run, rows, comparison, artifacts, pages.screenshots)
-        mark_success(run)
-        send_success_notification(run, comparison, artifacts)
-
-    except Exception as exc:
-        mark_failed(run, exc)
-        send_failure_notification(run, exc)
-        raise
-```
-
----
-
-## 13. Failure and recovery behavior
-
-| Failure | Required behavior |
-|---|---|
-| Finviz unavailable | Retry, then alert; preserve prior snapshot |
-| CAPTCHA or login challenge | Stop and alert; do not attempt bypass |
-| Result table selector missing | Save screenshot and HTML; fail run |
-| Count mismatch | Retry once; fail if mismatch persists |
-| Duplicate ticker | De-duplicate, log warning, preserve raw rows |
-| Exchange unresolved | Put in exception file; fail publication by default |
-| TradingView automation fails | Keep generated file; notify that manual upload is required |
-| Notification fails | Keep artifacts and mark `SUCCESS_NOTIFICATION_FAILED` |
-| Previous snapshot missing | Create baseline; no deletion calculation |
-
----
-
-## 14. Acceptance criteria
-
-The implementation is accepted when all conditions below pass.
-
-1. Given a screen with 44 results across three pages, the application captures exactly 44 unique tickers.
-2. The application saves all three page screenshots.
-3. The generated TradingView file contains exactly 44 exchange-qualified symbols.
-4. Re-running the same screen produces zero additions and zero removals.
-5. Adding two symbols and removing one produces exactly two additions and one removal.
-6. A partial two-page extraction against a displayed count of 44 is rejected.
-7. An unresolved symbol prevents publication and appears in an exception report.
-8. The first run creates a baseline without falsely reporting the full list as new.
-9. A failed run does not replace the latest successful snapshot.
-10. The weekly notification includes total, added, removed, unchanged, run status, and the TradingView file.
-
----
-
-## 15. Testing strategy
-
-### Unit tests
-
-- Ticker normalization
-- Share-class punctuation handling
-- Set comparison
-- Exchange mapping
-- TradingView file formatting
-- First-run baseline behavior
-
-### Adapter tests
-
-- One-page result set
-- Three-page result set
-- Empty result set
-- Missing next button
-- Repeated page loop
-- Layout change / missing selector
-
-### Golden-file tests
-
-Store representative sanitized HTML pages and expected outputs. The extractor should be testable without live Finviz access.
-
-### End-to-end test
-
-Run in headed mode against the saved screen, compare the result count, inspect output files, then enable the scheduler.
-
----
-
-## 16. Deployment options
-
-### Option A — Windows desktop, recommended for the free-account workflow
-
-- Python application
-- Playwright Chromium
-- Windows Task Scheduler
-- Persistent local browser profile
-- Local folders synchronized to OneDrive or Google Drive
-- Email through an app password or approved mail API
-
-Advantages:
-
-- Browser looks like the user's normal machine
-- Easy initial login and troubleshooting
-- Lowest deployment complexity
-
-### Option B — Small cloud VM
-
-- Linux VM
-- Cron or systemd timer
-- Headless Chromium
-- Private object storage
-- Email/webhook notification
+- Real config is user-local and not in repo.
+- Manifest does not store cookies or full HTML.
+- Secret redaction utility exists and is tested.
+- `.gitignore` excludes runtime data.
 
 Risks:
 
-- Higher probability of bot detection
-- Session and CAPTCHA handling is less convenient
+- Screenshots and HTML may contain user-visible page state.
+- Logs may include URLs; Finviz screener URLs are not secrets but can reveal strategy.
+- No credential store integration exists.
+- Email provider settings are modeled but not implemented.
 
-### Option C — Supported data route
+## 29. Performance And Scalability
 
-- Finviz paid export/API
-- Serverless function or scheduled Python job
-- No browser or OCR
-- Same normalization, comparison, and output modules
+Expected scale: 1-10 Finviz result pages per screen, tens to hundreds of symbols.
 
-This is the cleanest option when reliability and zero-touch operation matter more than avoiding a subscription.
+Implemented limits:
 
----
+- Browser collector `max_pages=50`.
+- Delay between screens defaults to 1000 ms.
+- Screens are intentionally sequential.
 
-## 17. Recommended implementation phases
+No parallel scanning is planned for release because it increases challenge risk and complicates isolation.
 
-### Phase 1 — Reliable local MVP
+## 30. Testing Strategy
 
-- Exact saved-screen URL
-- Playwright DOM extraction
-- Multi-page capture
-- CSV/JSON snapshots
-- Add/remove report
-- TradingView `.txt`
-- Manual execution
+Status: **IMPLEMENTED AND VERIFIED for offline suite**.
 
-### Phase 2 — Scheduling and delivery
+Tools:
 
-- Windows Task Scheduler or cron
-- Email/cloud-folder delivery
-- Retry and failure alerts
-- Historical SQLite database
+- `pytest`
+- `ruff`
+- `mypy`
+- sanitized fixtures
+- mocked Playwright behavior
 
-### Phase 3 — Optional refinements
+Current test areas:
 
-- Consecutive-week statistics
-- Re-entry detection
-- HTML dashboard
-- TradingView UI automation
-- OCR fallback
-- Paid Finviz API adapter
+- DOM extraction and pagination.
+- Finviz readiness and diagnostics.
+- Browser collector error conversion and multi-screen context reuse.
+- Symbol-master BOM/header/refresh behavior.
+- Storage and failure-baseline safety.
+- TradingView output formatting.
+- Multi-screen config, CLI, workflow, manifest, and history isolation.
+- Scheduler command construction.
+- Workflow retries and process lock.
 
----
+Live Finviz tests are opt-in. Headed live validation has succeeded in a temporary two-screen run, but unattended headless validation is not dependable.
 
-## 18. Final recommendation
+## 31. Acceptance Criteria
 
-Build the core as a **source-independent weekly watchlist pipeline** with a Finviz adapter. Use DOM extraction, not OCR, for the free-account MVP. Generate a TradingView `.txt` file and weekly additions/removals report automatically. Keep TradingView upload manual unless there is a strong need for UI automation. For the most dependable zero-intervention workflow, use Finviz's supported export/API capability and eliminate browser scraping entirely.
+Release acceptance requires:
+
+- `pytest` passes offline.
+- `ruff check .` passes.
+- `ruff format --check .` passes.
+- `mypy src` passes.
+- `finviz-scanner doctor` passes under the intended Python 3.12 environment.
+- First headed scan succeeds using real config.
+- At least two configured real screens succeed in one headed session.
+- `validate`, `history`, `compare`, and `export-tradingview` are updated for multi-screen outputs.
+- Scheduled-scan limitations are documented in user-facing docs.
+- Failed screen never overwrites previous stable watchlist.
+- Failed or partial runs never become comparison baselines.
+
+## 32. Known Limitations
+
+- Headless scans are experimental when Finviz challenges automation.
+- Multi-screen config must currently be edited manually.
+- Zero-result screens fail instead of publishing empty outputs.
+- No automated TradingView upload.
+- No email notification implementation.
+- No retention policy for snapshots, working HTML, screenshots, or logs.
+- No persistent browser profile support.
+- No central log configuration enforcement.
+
+## 33. Known Defects
+
+- `DEF-001`: `configure` writes only `saved_screen_url`; it cannot create `finviz.screens`.
+- `DEF-002`: `validate` checks obsolete `latest` artifacts and is incompatible with multi-screen scan outputs.
+- `DEF-003`: `export-tradingview` depends on obsolete `validate`.
+- `DEF-004`: `compare` and `history` are not screen-aware enough for multi-screen operations.
+- `DEF-005`: `doctor` can emit an unhandled traceback on output-root permission errors.
+- `DEF-006`: scheduled scan defaults to headless and cannot recover from CAPTCHA.
+- `DEF-007`: local editable install fails under Python 3.14 by design; scripts require Python 3.12.
+- `DEF-008`: failure diagnostics can be overwritten by later screen failures in the same run.
+- `DEF-009`: `notification` and `tradingview.automated_upload_enabled` config fields are not functional.
+- `DEF-010`: `first_seen`, `last_seen`, `weeks_on_list`, and `reentry` fields are not fully maintained.
+
+## 34. Planned Enhancements
+
+- Multi-screen interactive `configure`.
+- Screen-aware `validate`, `compare`, `history`, and `export-tradingview`.
+- Persistent browser profile option for headed troubleshooting.
+- Clear zero-result policy and implementation.
+- Retention/cleanup command.
+- Better structured logging with run ID and screen ID.
+- Optional notification adapter.
+- Packaged installer or robust environment bootstrap.
+
+## 35. Release-Readiness Checklist
+
+- [x] Offline tests pass.
+- [x] Ruff passes.
+- [x] Mypy passes.
+- [x] Multi-screen scan implemented.
+- [x] Stable per-screen watchlists implemented.
+- [x] Per-screen history isolation implemented.
+- [x] Symbol-master refresh implemented.
+- [ ] Python 3.12 environment repaired and verified through `finviz-scanner.exe`.
+- [ ] Multi-screen interactive configuration implemented.
+- [ ] Screen-aware validate/export/history/compare implemented.
+- [ ] Permission errors handled cleanly in `doctor`.
+- [ ] Scheduler documentation warns about CAPTCHA/headless limitations.
+- [ ] Real user config contains at least two screens for recurring workflow.
+
+## 36. Requirements Traceability Matrix
+
+| ID | Capability | Status | Implementation | Tests / evidence |
+|---|---|---|---|---|
+| FR-001 | Scan a Finviz screener | IMPLEMENTED AND VERIFIED | `browser\finviz_browser.py`, `workflow\multi_screen_runner.py` | `test_workflow.py`, live headed temp run |
+| FR-002 | Scan multiple screens sequentially | IMPLEMENTED AND VERIFIED | `collect_many`, `run_multi_screen_scan` | `test_multi_screen_workflow.py`, `test_browser_collector.py` |
+| FR-003 | Isolate screen failures | IMPLEMENTED AND VERIFIED | `ScreenCollection`, `ScreenScanResult` | `test_failed_screen_retains_previous_stable_file` |
+| FR-004 | Support legacy `saved_screen_url` | IMPLEMENTED AND VERIFIED | `FinvizConfig.resolved_screens` | `test_saved_screen_url_becomes_default_screen` |
+| CLI-001 | `scan --screen` repeatable | IMPLEMENTED AND VERIFIED | `cli.scan` | `test_scan_passes_repeatable_screen_options` |
+| CLI-002 | `list-screens` | IMPLEMENTED AND VERIFIED | `cli.list_screens` | `test_multi_screen_cli.py` |
+| CLI-003 | `validate` multi-screen | KNOWN DEFECT | `cli.validate` | No valid multi-screen test |
+| CLI-004 | `export-tradingview` multi-screen | KNOWN DEFECT | `cli.export_tradingview` | No valid multi-screen test |
+| CFG-001 | Validate screen IDs | IMPLEMENTED AND VERIFIED | `ScreenConfig.validate_id` | `test_multi_screen_config.py` |
+| CFG-002 | Reject duplicate outputs | IMPLEMENTED AND VERIFIED | `FinvizConfig.validate_screen_configuration` | `test_duplicate_output_filenames_are_rejected` |
+| FIN-001 | Avoid `networkidle` | IMPLEMENTED AND VERIFIED | `page.goto(...domcontentloaded...)` | `test_finviz_readiness.py` |
+| FIN-002 | Detect CAPTCHA/challenge | IMPLEMENTED AND VERIFIED | `detect_blockers` | readiness tests |
+| FIN-003 | Legitimate zero-result publish | PLANNED | none | Known limitation |
+| DATA-001 | BOM-safe symbol-master CSV | IMPLEMENTED AND VERIFIED | `load_symbol_master` | `test_symbol_master.py` |
+| DATA-002 | Nasdaq Trader refresh | IMPLEMENTED AND VERIFIED | `master_builder.py` | `test_symbol_master_refresh.py` |
+| STATE-001 | Previous success per screen | IMPLEMENTED AND VERIFIED | `latest_successful_symbols_for_screen` | `test_history_comparison_is_screen_scoped` |
+| STATE-002 | Failed runs not baselines | IMPLEMENTED AND VERIFIED | success-only queries | `test_failed_run_does_not_replace_previous_successful_snapshot` |
+| OUT-001 | TradingView comma line | IMPLEMENTED AND VERIFIED | `tradingview_line` | `test_tradingview_output.py` |
+| OUT-002 | Atomic stable watchlist replace | IMPLEMENTED AND VERIFIED | `os.replace` | multi-screen workflow tests |
+| OPS-001 | Windows task command | IMPLEMENTED AND VERIFIED | `scheduler.py` | `test_cli_scheduler_logging.py` |
+| OPS-002 | Doctor checks symbol master | IMPLEMENTED AND VERIFIED | `cli.doctor` | local doctor run |
+| OPS-003 | Doctor handles permission errors | KNOWN DEFECT | none | observed sandbox traceback |
+| SEC-001 | No cookies in manifest | IMPLEMENTED AND VERIFIED | manifest writer | `test_manifest_records_success_and_failure` |
+| TEST-001 | Offline default test suite | IMPLEMENTED AND VERIFIED | `pyproject.toml` | `94 passed, 1 skipped` |
+
+## 37. Open Decisions
+
+- Should zero-result Finviz screens publish empty watchlists or fail to preserve prior output?
+- Should the application create/update multi-screen config interactively, or should screen config remain manual YAML editing?
+- Should `latest` be removed, restored as a compatibility alias, or replaced by per-screen `latest\<screen-id>` directories?
+- Should scheduled tasks run headed, headless, or refuse installation until the user accepts CAPTCHA limitations?
+- Should browser sessions use a persistent user data directory?
+- Should stable watchlists include a trailing newline?
+- Should `P`/NYSE Arca map to `AMEX`, `NYSEARCA`, or a configurable TradingView prefix?
+
+## Acceptance Scenarios
+
+### AS-001 Clean Windows installation
+
+Given Python 3.12 is installed and available as `py -3.12`, when the user runs `scripts\install.ps1`, then `.venv` is created, dependencies install, Chromium installs, and `doctor` runs.
+
+### AS-002 Successful doctor execution
+
+Given valid config, writable output root, installed Chromium, and a valid symbol master, when `finviz-scanner doctor` runs, then it exits `0` and reports usable symbol rows.
+
+### AS-003 First successful headed scan
+
+Given one configured screen and a valid symbol master, when `finviz-scanner scan --headed` succeeds, then a snapshot directory, manifest, SQLite success row, and stable watchlist are created.
+
+### AS-004 Subsequent scan with additions
+
+Given a previous successful screen run, when a later successful run contains new tickers, then additions files contain only new tickers.
+
+### AS-005 Subsequent scan with removals
+
+Given a previous successful screen run, when a later successful run omits previous tickers, then removals files contain only omitted tickers.
+
+### AS-006 Scan with additions and removals
+
+Given a previous successful screen run, when current and previous sets differ both ways, then additions, removals, and unchanged are calculated by normalized ticker.
+
+### AS-007 Multi-screen scan
+
+Given multiple enabled screens, when `scan --headed` runs, then one browser session processes screens in config order and writes separate outputs.
+
+### AS-008 One screen fails while another succeeds
+
+Given two screens, when one screen fails after another succeeds, then successful output is published and failed screen retains previous stable file.
+
+### AS-009 CAPTCHA displayed
+
+Given Finviz returns challenge text, when readiness inspects the page, then `CaptchaError` is raised and diagnostics are saved.
+
+### AS-010 Finviz page times out
+
+Given navigation times out before document readiness, when no result locator appears, then scan fails with a navigation timeout message and diagnostics.
+
+### AS-011 Document loaded but selectors missing
+
+Given a Finviz-looking page without ticker selectors or zero-result indicator, when readiness times out, then extraction fails without publication.
+
+### AS-012 Empty legitimate screen result
+
+Current behavior: fails. Release decision required before acceptance.
+
+### AS-013 Browser launch failure
+
+Given Chromium cannot launch, when scan starts, then the screen/run fails and previous outputs remain.
+
+### AS-014 Missing symbol-master file
+
+Given no `symbol-master.csv`, when scan starts, then `ConfigurationError` is raised before publication.
+
+### AS-015 BOM-prefixed symbol-master header
+
+Given a UTF-8 BOM CSV with `ticker,exchange`, when loaded, then headers normalize and rows load.
+
+### AS-016 Quoted CSV header
+
+Given normal CSV quoting around headers, when `csv.DictReader` loads it, then headers normalize to `ticker,exchange`.
+
+### AS-017 Unknown ticker
+
+Given extracted ticker absent from symbol master, when resolver runs, then `ExchangeResolutionError` prevents publication.
+
+### AS-018 Failed run after prior successful run
+
+Given a prior stable watchlist, when a later screen fails, then the stable watchlist remains unchanged.
+
+### AS-019 TradingView full-watchlist generation
+
+Given resolved symbols, when outputs are written, then full TradingView files contain one comma-separated exchange-qualified line.
+
+### AS-020 Additions-only file generation
+
+Given comparison additions, when outputs are written, then additions files contain only additions.
+
+### AS-021 Removals-only file generation
+
+Given comparison removals, when outputs are written, then removals CSV and alias text contain only removals.
+
+### AS-022 Atomic replacement of output files
+
+Given a successful screen, when stable watchlist is published, then a temporary file is replaced via `os.replace`.
+
+### AS-023 Scheduled execution using absolute paths
+
+Given settings and project root, when scheduler command is generated, then it contains absolute script, project, and log paths.
+
+### AS-024 Filesystem permission failure
+
+Current behavior: `doctor` can traceback. Release requirement: catch and print actionable error.
+
+### AS-025 Test execution on Windows
+
+Given default temp permissions fail, when running tests, then use `python -m pytest --basetemp <writable-temp>`.
+
