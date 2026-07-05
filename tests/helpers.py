@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from finviz_scanner.config import FinvizConfig, OutputConfig, Settings
+from finviz_scanner.config import FinvizConfig, OutputConfig, ScreenConfig, Settings
 from finviz_scanner.models import PageCapture
 
 TICKERS_44 = (
@@ -89,6 +89,26 @@ def settings_for(tmp_path: Path) -> Settings:
     return Settings(
         finviz=FinvizConfig(
             saved_screen_url="https://finviz.com/screener.ashx?v=111&f=cap_smallover"
+        ),
+        output=OutputConfig(root_directory=tmp_path),
+    )
+
+
+def multi_settings_for(tmp_path: Path) -> Settings:
+    return Settings(
+        finviz=FinvizConfig(
+            screens=[
+                ScreenConfig(
+                    id="stage-2",
+                    name="Stage 2 Candidates",
+                    url="https://finviz.com/screener.ashx?v=111&f=cap_smallover",
+                ),
+                ScreenConfig(
+                    id="momentum",
+                    name="Momentum Candidates",
+                    url="https://finviz.com/screener.ashx?v=111&f=sh_price_o30",
+                ),
+            ]
         ),
         output=OutputConfig(root_directory=tmp_path),
     )

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from finviz_scanner.errors import ConfigurationError
+from finviz_scanner.models import FinvizScreenConfig
 from finviz_scanner.utils import validate_finviz_url
 
 DEFAULT_OUTPUT_DIR = Path.cwd() / "Documents" / "FinvizWeeklyScanner"
 CONFIG_PATH = Path.home() / "AppData" / "Local" / "finviz-weekly-scanner" / "settings.yaml"
+SCREEN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 
 
 class AppConfig(BaseModel):
@@ -49,8 +53,65 @@ class ScheduleConfig(BaseModel):
         return f"{hour:02d}:{minute:02d}"
 
 
+class ScreenConfig(BaseModel):
+    id: str
+    name: str
+    url: str
+    enabled: bool = True
+    tradingview_filename: str | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not SCREEN_ID_PATTERN.fullmatch(normalized):
+            msg = "Screen ID must match ^[a-z0-9][a-z0-9_-]{0,49}$ and contain no path separators."
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            msg = "Screen name must be non-empty."
+            raise ValueError(msg)
+        return stripped
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return validate_finviz_url(value)
+
+    @field_validator("tradingview_filename")
+    @classmethod
+    def validate_tradingview_filename(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            msg = "TradingView output filename must be non-empty when configured."
+            raise ValueError(msg)
+        path = Path(stripped)
+        if path.name != stripped or path.is_absolute() or "/" in stripped or "\\" in stripped:
+            msg = "TradingView output filename must be a basename only."
+            raise ValueError(msg)
+        return stripped
+
+    def to_domain(self) -> FinvizScreenConfig:
+        return FinvizScreenConfig(
+            id=self.id,
+            name=self.name,
+            url=self.url,
+            enabled=self.enabled,
+            tradingview_filename=self.tradingview_filename,
+        )
+
+
 class FinvizConfig(BaseModel):
-    saved_screen_url: str
+    saved_screen_url: str | None = None
+    screens: list[ScreenConfig] | None = None
+    delay_between_screens_ms: int = 1000
     expected_page_size: int = 20
     browser_headless: bool = True
     save_screenshots: bool = True
@@ -59,8 +120,68 @@ class FinvizConfig(BaseModel):
 
     @field_validator("saved_screen_url")
     @classmethod
-    def validate_url(cls, value: str) -> str:
+    def validate_legacy_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return validate_finviz_url(value)
+
+    @field_validator("delay_between_screens_ms")
+    @classmethod
+    def validate_delay(cls, value: int) -> int:
+        if value < 0:
+            msg = "Delay between screens must be zero or greater."
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def validate_screen_configuration(self) -> FinvizConfig:
+        if self.screens is not None and self.saved_screen_url is not None:
+            msg = "Configure either finviz.screens or finviz.saved_screen_url, not both."
+            raise ValueError(msg)
+        if self.screens is None and self.saved_screen_url is None:
+            msg = "At least one Finviz screen must be configured."
+            raise ValueError(msg)
+        screens = self.resolved_screens()
+        seen_ids: dict[str, str] = {}
+        seen_outputs: dict[str, str] = {}
+        for screen in screens:
+            lowered_id = screen.id.lower()
+            if lowered_id in seen_ids:
+                msg = f"screen IDs must be unique. Duplicate ID: {screen.id}"
+                raise ValueError(msg)
+            seen_ids[lowered_id] = screen.id
+            output = self.tradingview_filename_for(screen).lower()
+            if output in seen_outputs:
+                msg = (
+                    f"screens '{seen_outputs[output]}' and '{screen.id}' "
+                    f"both resolve to output file '{self.tradingview_filename_for(screen)}'."
+                )
+                raise ValueError(msg)
+            seen_outputs[output] = screen.id
+        return self
+
+    def resolved_screens(self) -> list[FinvizScreenConfig]:
+        if self.screens is not None:
+            return [screen.to_domain() for screen in self.screens]
+        if self.saved_screen_url is not None:
+            return [
+                FinvizScreenConfig(
+                    id="default",
+                    name="Default Screen",
+                    url=self.saved_screen_url,
+                    enabled=True,
+                )
+            ]
+        return []
+
+    @staticmethod
+    def tradingview_filename_for(screen: FinvizScreenConfig) -> str:
+        filename = screen.tradingview_filename or f"{screen.id}.txt"
+        parsed = urlparse(filename)
+        if parsed.scheme or parsed.netloc:
+            msg = "TradingView output filename must be a basename only."
+            raise ValueError(msg)
+        return filename
 
 
 class ValidationConfig(BaseModel):

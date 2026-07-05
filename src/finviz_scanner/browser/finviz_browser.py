@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +23,18 @@ from finviz_scanner.extraction.finviz_dom import (
     parse_displayed_count,
     parse_page_indicator,
 )
-from finviz_scanner.models import PageCapture
+from finviz_scanner.models import FinvizScreenConfig, PageCapture
 from finviz_scanner.utils import ensure_directory
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenCollection:
+    screen: FinvizScreenConfig
+    pages: tuple[PageCapture, ...] = ()
+    error: BaseException | None = None
+    browser_wide: bool = False
 
 
 class FinvizBrowserCollector:
@@ -42,6 +52,18 @@ class FinvizBrowserCollector:
         self.readiness_timeout_ms = readiness_timeout_ms
 
     def collect(self, url: str) -> tuple[PageCapture, ...]:
+        screen = FinvizScreenConfig(id="default", name="Default Screen", url=url)
+        result = self.collect_many([screen])[0]
+        if result.error is not None:
+            raise result.error
+        return result.pages
+
+    def collect_many(
+        self,
+        screens: list[FinvizScreenConfig],
+        *,
+        delay_between_screens_ms: int = 1000,
+    ) -> list[ScreenCollection]:
         try:
             from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -51,106 +73,173 @@ class FinvizBrowserCollector:
 
         screenshot_dir = ensure_directory(self.output_dir / "screenshots")
         html_dir = ensure_directory(self.output_dir / "html")
-        pages: list[PageCapture] = []
-        signatures: set[tuple[str, ...]] = set()
+        results: list[ScreenCollection] = []
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=not self.headed)
-            page = browser.new_page(viewport={"width": 1400, "height": 1000})
-            http_status: int | None = None
+            context = browser.new_context(viewport={"width": 1400, "height": 1000})
+            page = context.new_page()
             try:
-                logger.info("navigation_started", extra={"url": url})
-                try:
-                    response = page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                    http_status = response.status if response is not None else None
-                    logger.info("domcontentloaded", extra={"url": page.url})
-                except PlaywrightTimeoutError as exc:
+                for index, screen in enumerate(screens):
+                    if index > 0 and delay_between_screens_ms:
+                        time.sleep(delay_between_screens_ms / 1000)
                     try:
-                        wait_for_finviz_ready(
+                        pages = self._collect_screen(
                             page,
-                            timeout_ms=1_000,
-                            stage="navigation_timeout_probe",
+                            screen,
+                            screenshot_dir=screenshot_dir / screen.id,
+                            html_dir=html_dir / screen.id,
                         )
-                    except Exception:
+                        results.append(ScreenCollection(screen=screen, pages=pages))
+                    except (CaptchaError, ExtractionError) as exc:
                         save_failure_diagnostics(
                             page,
                             self.output_dir,
-                            http_status=http_status,
-                            stage="navigation",
-                            timeout_ms=60_000,
+                            http_status=None,
+                            stage=f"{screen.id}_readiness",
+                            timeout_ms=self.readiness_timeout_ms,
                         )
-                        raise ExtractionError(
-                            "Navigation timed out before document creation."
-                        ) from exc
-                    logger.info("domcontentloaded", extra={"url": page.url})
-                ensure_finviz_url(page.url)
-                logger.info(
-                    "navigation_status",
-                    extra={
-                        "http_status": http_status,
-                        "final_url": page.url,
-                        "page_title": page.title(),
-                    },
-                )
+                        results.append(ScreenCollection(screen=screen, error=exc))
+                    except PlaywrightTimeoutError:
+                        save_failure_diagnostics(
+                            page,
+                            self.output_dir,
+                            http_status=None,
+                            stage=f"{screen.id}_playwright_timeout",
+                            timeout_ms=self.readiness_timeout_ms,
+                        )
+                        results.append(
+                            ScreenCollection(
+                                screen=screen,
+                                error=ExtractionError(
+                                    "Finviz document loaded but results were not detected."
+                                ),
+                            )
+                        )
+                    except PlaywrightError as exc:
+                        save_failure_diagnostics(
+                            page,
+                            self.output_dir,
+                            http_status=None,
+                            stage=f"{screen.id}_playwright_operational_error",
+                            timeout_ms=self.readiness_timeout_ms,
+                        )
+                        error = ExtractionError(
+                            f"Playwright failed while collecting the Finviz screen: {exc}"
+                        )
+                        results.append(
+                            ScreenCollection(screen=screen, error=error, browser_wide=True)
+                        )
+                        for remaining in screens[index + 1 :]:
+                            results.append(
+                                ScreenCollection(
+                                    screen=remaining,
+                                    error=ExtractionError(
+                                        "Browser session ended before this screen."
+                                    ),
+                                    browser_wide=True,
+                                )
+                            )
+                        break
+            finally:
+                context.close()
+                browser.close()
+        return results
+
+    def _collect_screen(
+        self,
+        page: Any,
+        screen: FinvizScreenConfig,
+        *,
+        screenshot_dir: Path,
+        html_dir: Path,
+    ) -> tuple[PageCapture, ...]:
+        try:
+            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        except ImportError as exc:  # pragma: no cover - exercised by doctor when missing.
+            raise ExtractionError("Playwright is not installed.") from exc
+
+        pages: list[PageCapture] = []
+        signatures: set[tuple[str, ...]] = set()
+        http_status: int | None = None
+        ensure_directory(screenshot_dir)
+        ensure_directory(html_dir)
+        logger.info(
+            "[%s] navigation_started",
+            screen.id,
+            extra={"screen_id": screen.id, "url": screen.url},
+        )
+        try:
+            response = page.goto(screen.url, wait_until="domcontentloaded", timeout=60_000)
+            http_status = response.status if response is not None else None
+            logger.info(
+                "[%s] domcontentloaded",
+                screen.id,
+                extra={"screen_id": screen.id, "url": page.url},
+            )
+        except PlaywrightTimeoutError as exc:
+            try:
                 wait_for_finviz_ready(
                     page,
-                    timeout_ms=self.readiness_timeout_ms,
-                    stage="initial",
+                    timeout_ms=1_000,
+                    stage="navigation_timeout_probe",
                 )
-                option_values = _page_option_values(page)
-                if option_values:
-                    pages.extend(
-                        self._collect_select_pages(
-                            page,
-                            option_values[: self.max_pages],
-                            signatures,
-                            screenshot_dir,
-                            html_dir,
-                        )
-                    )
-                else:
-                    pages.extend(
-                        self._collect_legacy_next_pages(
-                            page,
-                            signatures,
-                            screenshot_dir,
-                            html_dir,
-                        )
-                    )
-            except PlaywrightTimeoutError as exc:
+            except Exception:
                 save_failure_diagnostics(
                     page,
                     self.output_dir,
                     http_status=http_status,
-                    stage="playwright_timeout",
-                    timeout_ms=self.readiness_timeout_ms,
+                    stage=f"{screen.id}_navigation",
+                    timeout_ms=60_000,
                 )
-                raise ExtractionError(
-                    "Finviz document loaded but results were not detected."
-                ) from exc
-            except (CaptchaError, ExtractionError) as exc:
-                save_failure_diagnostics(
+                raise ExtractionError("Navigation timed out before document creation.") from exc
+            logger.info(
+                "[%s] domcontentloaded",
+                screen.id,
+                extra={"screen_id": screen.id, "url": page.url},
+            )
+        ensure_finviz_url(page.url)
+        logger.info(
+            "[%s] navigation_status",
+            screen.id,
+            extra={
+                "screen_id": screen.id,
+                "http_status": http_status,
+                "final_url": page.url,
+                "page_title": page.title(),
+            },
+        )
+        wait_for_finviz_ready(
+            page,
+            timeout_ms=self.readiness_timeout_ms,
+            stage="initial",
+        )
+        option_values = _page_option_values(page)
+        if option_values:
+            pages.extend(
+                self._collect_select_pages(
                     page,
-                    self.output_dir,
-                    http_status=http_status,
-                    stage="readiness",
-                    timeout_ms=self.readiness_timeout_ms,
+                    option_values[: self.max_pages],
+                    signatures,
+                    screenshot_dir,
+                    html_dir,
                 )
-                raise exc
-            except PlaywrightError as exc:
-                save_failure_diagnostics(
+            )
+        else:
+            pages.extend(
+                self._collect_legacy_next_pages(
                     page,
-                    self.output_dir,
-                    http_status=http_status,
-                    stage="playwright_operational_error",
-                    timeout_ms=self.readiness_timeout_ms,
+                    signatures,
+                    screenshot_dir,
+                    html_dir,
                 )
-                raise ExtractionError(
-                    f"Playwright failed while collecting the Finviz screen: {exc}"
-                ) from exc
-            finally:
-                browser.close()
+            )
         if not pages:
             raise CaptchaError("No pages were collected.")
+        logger.info(
+            "[%s] collected_pages",
+            screen.id,
+            extra={"screen_id": screen.id, "page_count": len(pages)},
+        )
         return tuple(pages)
 
     def _capture_current_page(

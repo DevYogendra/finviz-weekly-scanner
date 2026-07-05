@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -20,11 +21,12 @@ from finviz_scanner.config import (
     write_settings,
 )
 from finviz_scanner.errors import ConfigurationError, ScannerError, SymbolMasterValidationError
+from finviz_scanner.models import MultiScreenRunResult
 from finviz_scanner.scheduler import schtasks_create_args
 from finviz_scanner.storage.sqlite import SQLiteStore
 from finviz_scanner.symbols.master_builder import refresh_symbol_master
 from finviz_scanner.symbols.resolver import SymbolResolver, load_symbol_master
-from finviz_scanner.workflow.runner import run_scan
+from finviz_scanner.workflow.multi_screen_runner import run_multi_screen_scan
 
 app = typer.Typer(help="Finviz Weekly Stage-2 Scanner")
 
@@ -50,7 +52,20 @@ def configure() -> None:
 
 
 @app.command()
-def scan(headed: bool = typer.Option(False, help="Open a visible Chromium browser.")) -> None:
+def scan(
+    headed: bool = typer.Option(False, help="Open a visible Chromium browser."),
+    screen: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--screen",
+            help="Screen ID to scan. Repeat to scan multiple configured screens.",
+        ),
+    ] = None,
+    include_disabled: bool = typer.Option(
+        False,
+        help="Allow explicitly requested disabled screens to run.",
+    ),
+) -> None:
     """Run the complete Finviz collection workflow."""
     try:
         settings = load_settings()
@@ -59,11 +74,40 @@ def scan(headed: bool = typer.Option(False, help="Open a visible Chromium browse
             headed=headed,
         )
         resolver = _resolver(settings.output.root_directory)
-        run_dir = run_scan(settings, collector, resolver)
+        result = run_multi_screen_scan(
+            settings,
+            collector,
+            resolver,
+            selected_screen_ids=tuple(screen or ()),
+            include_disabled=include_disabled,
+            headed=headed,
+        )
     except ScannerError as exc:
         typer.echo(f"Scan failed: {exc}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(f"Scan succeeded: {run_dir}")
+    _print_scan_summary(settings, result)
+    if result.status == "partial_success":
+        raise typer.Exit(2)
+    if result.status != "success":
+        raise typer.Exit(1)
+
+
+@app.command("list-screens")
+def list_screens(show_urls: bool = typer.Option(False, help="Print Finviz URLs.")) -> None:
+    """List configured Finviz screens."""
+    try:
+        settings = load_settings()
+    except ScannerError as exc:
+        typer.echo(f"Configuration error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    headers = ("ID", "Enabled", "Name", "URL") if show_urls else ("ID", "Enabled", "Name")
+    typer.echo(f"{headers[0]:<16} {headers[1]:<8} {headers[2]}")
+    for configured in settings.finviz.resolved_screens():
+        enabled = "yes" if configured.enabled else "no"
+        line = f"{configured.id:<16} {enabled:<8} {configured.name}"
+        if show_urls:
+            line += f"  {configured.url}"
+        typer.echo(line)
 
 
 @app.command()
@@ -228,6 +272,33 @@ def _resolver(root: Path) -> SymbolResolver:
         msg = f"Symbol master not found: {path}. Create ticker,exchange CSV before scanning."
         raise ConfigurationError(msg)
     return SymbolResolver.from_csv(path)
+
+
+def _print_scan_summary(settings: Settings, result: object) -> None:
+    typed = result
+    if not isinstance(typed, MultiScreenRunResult):
+        return
+    typer.echo(f"Multi-screen scan completed: {typed.status.replace('_', ' ')}")
+    typer.echo("")
+    typer.echo(f"{'Screen':<16} {'Status':<14} {'Tickers':<8} Output")
+    for screen_result in typed.screens:
+        tickers = str(screen_result.resolved_count) if screen_result.status == "success" else "-"
+        if screen_result.status == "success":
+            screen = next(
+                item
+                for item in settings.finviz.resolved_screens()
+                if item.id == screen_result.screen_id
+            )
+            output = str(
+                settings.output.root_directory
+                / "watchlists"
+                / settings.finviz.tradingview_filename_for(screen)
+            )
+        else:
+            output = "previous output retained"
+        typer.echo(
+            f"{screen_result.screen_id:<16} {screen_result.status:<14} {tickers:<8} {output}"
+        )
 
 
 if __name__ == "__main__":

@@ -9,7 +9,17 @@ schedule:
   retry_delay_minutes: 15
 
 finviz:
-  saved_screen_url: "COPY_EXACT_SAVED_SCREEN_URL_HERE"
+  screens:
+    - id: stage-2
+      name: Stage 2 Candidates
+      url: "COPY_EXACT_SAVED_SCREEN_URL_HERE"
+      enabled: true
+      tradingview_filename: "stage-2.txt"
+    - id: momentum
+      name: Momentum Candidates
+      url: "COPY_EXACT_SAVED_SCREEN_URL_HERE"
+      enabled: false
+  delay_between_screens_ms: 1000
   expected_page_size: 20
   browser_headless: true
   save_screenshots: true

@@ -21,6 +21,37 @@ class ExtractionMode(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class FinvizScreenConfig:
+    id: str
+    name: str
+    url: str
+    enabled: bool = True
+    tradingview_filename: str | None = None
+
+
+@dataclass(slots=True)
+class ScreenScanResult:
+    screen_id: str
+    screen_name: str
+    url: str
+    status: str
+    ticker_count: int
+    resolved_count: int
+    rejected_count: int
+    output_directory: Path | None
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class MultiScreenRunResult:
+    run_id: str
+    started_at: datetime
+    completed_at: datetime
+    status: str
+    screens: list[ScreenScanResult]
+
+
+@dataclass(frozen=True, slots=True)
 class ExtractedRow:
     ticker: str
     company_name: str | None
@@ -91,3 +122,4 @@ class RunRecord:
     software_version: str = "0.1.0"
     error_category: str | None = None
     error_summary: str | None = None
+    screen_id: str | None = None

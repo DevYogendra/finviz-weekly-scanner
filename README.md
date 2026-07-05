@@ -20,6 +20,23 @@ finviz-scanner configure
 
 Copy the exact Finviz screener URL from your browser address bar after setting the filters. The app validates the URL but does not ask for it during code generation.
 
+The legacy `finviz.saved_screen_url` setting still works. For multiple screens, configure `finviz.screens` instead:
+
+```yaml
+finviz:
+  screens:
+    - id: stage-2
+      name: Stage 2 Candidates
+      url: "https://finviz.com/screener?..."
+      enabled: true
+      tradingview_filename: "stage-2.txt"
+    - id: momentum
+      name: Momentum Candidates
+      url: "https://finviz.com/screener?..."
+      enabled: true
+  delay_between_screens_ms: 1000
+```
+
 ## First Scan
 
 Run a visible browser first:
@@ -28,16 +45,29 @@ Run a visible browser first:
 finviz-scanner scan --headed
 ```
 
+List configured screens:
+
+```powershell
+finviz-scanner list-screens
+```
+
+Scan selected screens:
+
+```powershell
+finviz-scanner scan --screen stage-2 --screen momentum --headed
+```
+
 Review:
 
-- `latest\current.csv`
-- `latest\additions.csv`
-- `latest\removals.csv`
-- `latest\report.md`
-- `latest\tradingview-current.txt`
-- `latest\tradingview-additions.txt`
+- `snapshots\<run-id>\manifest.json`
+- `snapshots\<run-id>\<screen-id>\current.csv`
+- `snapshots\<run-id>\<screen-id>\additions.csv`
+- `snapshots\<run-id>\<screen-id>\removals.csv`
+- `snapshots\<run-id>\<screen-id>\report.md`
+- `snapshots\<run-id>\<screen-id>\tradingview-watchlist.txt`
+- `watchlists\<screen-id>.txt`
 
-Import `tradingview-current.txt` into TradingView when you want the full current list. Import `tradingview-additions.txt` when you only want new names.
+Import the stable per-screen files under `watchlists\` into TradingView. A failed screen keeps its previous stable watchlist file.
 
 ## Schedule
 
@@ -73,4 +103,5 @@ pytest
 ruff check .
 ruff format --check .
 mypy src
+finviz-scanner doctor
 ```

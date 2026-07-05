@@ -26,6 +26,7 @@ src/finviz_scanner/symbols/__init__.py
 src/finviz_scanner/symbols/master_builder.py
 src/finviz_scanner/symbols/resolver.py
 src/finviz_scanner/workflow/__init__.py
+src/finviz_scanner/workflow/multi_screen_runner.py
 src/finviz_scanner/workflow/runner.py
 src/finviz_weekly_scanner.egg-info/PKG-INFO
 src/finviz_weekly_scanner.egg-info/SOURCES.txt
@@ -33,10 +34,14 @@ src/finviz_weekly_scanner.egg-info/dependency_links.txt
 src/finviz_weekly_scanner.egg-info/entry_points.txt
 src/finviz_weekly_scanner.egg-info/requires.txt
 src/finviz_weekly_scanner.egg-info/top_level.txt
+tests/test_browser_collector.py
 tests/test_cli_scheduler_logging.py
 tests/test_extraction.py
 tests/test_finviz_readiness.py
 tests/test_live_integration.py
+tests/test_multi_screen_cli.py
+tests/test_multi_screen_config.py
+tests/test_multi_screen_workflow.py
 tests/test_pagination.py
 tests/test_storage.py
 tests/test_symbol_master.py

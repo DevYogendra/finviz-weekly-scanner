@@ -41,6 +41,9 @@ class SQLiteStore:
                 )
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)").fetchall()}
+            if "screen_id" not in columns:
+                db.execute("ALTER TABLE runs ADD COLUMN screen_id TEXT")
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screen_membership (
@@ -59,12 +62,46 @@ class SQLiteStore:
                 )
                 """
             )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screen_symbol_membership (
+                    run_id TEXT NOT NULL,
+                    screen_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    tv_symbol TEXT NOT NULL,
+                    company_name TEXT,
+                    finviz_rank INTEGER NOT NULL,
+                    source_page INTEGER NOT NULL,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    consecutive_weeks INTEGER,
+                    reentry INTEGER,
+                    PRIMARY KEY (run_id, screen_id, ticker)
+                )
+                """
+            )
 
     def upsert_run(self, run: RunRecord) -> None:
         with self._connect() as db:
             db.execute(
                 """
-                INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO runs (
+                    run_id,
+                    started_at,
+                    finished_at,
+                    scheduled_for,
+                    status,
+                    source_url_fingerprint,
+                    displayed_count,
+                    extracted_count,
+                    page_count,
+                    extraction_mode,
+                    software_version,
+                    error_category,
+                    error_summary,
+                    screen_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     finished_at=excluded.finished_at,
                     status=excluded.status,
@@ -72,7 +109,8 @@ class SQLiteStore:
                     extracted_count=excluded.extracted_count,
                     page_count=excluded.page_count,
                     error_category=excluded.error_category,
-                    error_summary=excluded.error_summary
+                    error_summary=excluded.error_summary,
+                    screen_id=excluded.screen_id
                 """,
                 (
                     run.run_id,
@@ -88,6 +126,7 @@ class SQLiteStore:
                     run.software_version,
                     run.error_category,
                     run.error_summary,
+                    getattr(run, "screen_id", None),
                 ),
             )
 
@@ -131,6 +170,95 @@ class SQLiteStore:
             if run is None:
                 return None
             return self.symbols_for_run(str(run["run_id"]))
+
+    def save_screen_membership(
+        self,
+        run_id: str,
+        screen_id: str,
+        symbols: tuple[ResolvedSymbol, ...],
+    ) -> None:
+        with self._connect() as db:
+            db.executemany(
+                """
+                INSERT INTO screen_symbol_membership VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        screen_id,
+                        item.ticker,
+                        item.exchange,
+                        item.tv_symbol,
+                        item.company_name,
+                        item.finviz_rank,
+                        item.source_page,
+                        item.first_seen,
+                        item.last_seen,
+                        item.weeks_on_list,
+                        1 if item.reentry else 0,
+                    )
+                    for item in symbols
+                ],
+            )
+
+    def latest_successful_symbols_for_screen(
+        self,
+        screen_id: str,
+        *,
+        before_run_id: str | None = None,
+    ) -> tuple[ResolvedSymbol, ...] | None:
+        run_id = self.latest_successful_run_id_for_screen(screen_id, before_run_id=before_run_id)
+        if run_id is None:
+            return None
+        return self.symbols_for_screen_run(run_id, screen_id)
+
+    def latest_successful_run_id_for_screen(
+        self,
+        screen_id: str,
+        *,
+        before_run_id: str | None = None,
+    ) -> str | None:
+        with self._connect() as db:
+            params: list[str] = [RunStatus.SUCCESS.value, screen_id]
+            query = "SELECT run_id FROM runs WHERE status = ? AND screen_id = ?"
+            if before_run_id is not None:
+                query += " AND run_id != ?"
+                params.append(before_run_id)
+            query += " ORDER BY finished_at DESC LIMIT 1"
+            run = db.execute(query, tuple(params)).fetchone()
+            if run is None:
+                return None
+            return str(run["run_id"])
+
+    def symbols_for_screen_run(
+        self,
+        run_id: str,
+        screen_id: str,
+    ) -> tuple[ResolvedSymbol, ...]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM screen_symbol_membership
+                WHERE run_id = ? AND screen_id = ?
+                ORDER BY finviz_rank
+                """,
+                (run_id, screen_id),
+            ).fetchall()
+        return tuple(
+            ResolvedSymbol(
+                ticker=str(row["ticker"]),
+                exchange=str(row["exchange"]),
+                tv_symbol=str(row["tv_symbol"]),
+                company_name=str(row["company_name"]) if row["company_name"] else None,
+                finviz_rank=int(row["finviz_rank"]),
+                source_page=int(row["source_page"]),
+                first_seen=str(row["first_seen"]) if row["first_seen"] else None,
+                last_seen=str(row["last_seen"]) if row["last_seen"] else None,
+                weeks_on_list=int(row["consecutive_weeks"] or 1),
+                reentry=bool(row["reentry"]),
+            )
+            for row in rows
+        )
 
     def symbols_for_run(self, run_id: str) -> tuple[ResolvedSymbol, ...]:
         with self._connect() as db:

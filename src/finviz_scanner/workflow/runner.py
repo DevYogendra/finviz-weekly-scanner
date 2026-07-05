@@ -40,9 +40,10 @@ def run_scan(
     temp_dir = root / "tmp" / actual_run_id
     lock_path = root / ".scan.lock"
     store = SQLiteStore(root / "scanner.sqlite3")
+    screen_url = settings.finviz.resolved_screens()[0].url
     run = RunRecord(
         run_id=actual_run_id,
-        source_url_fingerprint=fingerprint_url(settings.finviz.saved_screen_url),
+        source_url_fingerprint=fingerprint_url(screen_url),
     )
     store.upsert_run(run)
     with ProcessLock(lock_path):
@@ -50,7 +51,7 @@ def run_scan(
             ensure_directory(temp_dir)
             pages = _collect_with_retries(
                 collector,
-                settings.finviz.saved_screen_url,
+                screen_url,
                 attempts=3,
             )
             extraction = extract_pages(pages)

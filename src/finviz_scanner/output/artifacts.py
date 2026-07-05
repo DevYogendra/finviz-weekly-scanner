@@ -56,6 +56,47 @@ def write_outputs(
     )
 
 
+def write_screen_aliases(
+    output_dir: Path,
+    current: tuple[ResolvedSymbol, ...],
+    comparison: ComparisonResult,
+    *,
+    screen_id: str,
+    screen_name: str,
+    previous_successful_run_id: str | None,
+) -> None:
+    """Write multi-screen friendly filenames alongside legacy artifact names."""
+    (output_dir / "tradingview-watchlist.txt").write_text(
+        tradingview_line(current),
+        encoding="utf-8",
+    )
+    (output_dir / "additions.txt").write_text(
+        tradingview_line(comparison.additions),
+        encoding="utf-8",
+    )
+    (output_dir / "removals.txt").write_text(
+        tradingview_line(comparison.removals),
+        encoding="utf-8",
+    )
+    source_csv = output_dir / "current.csv"
+    if source_csv.exists():
+        (output_dir / "tickers.csv").write_text(
+            source_csv.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    metadata = {
+        "screen_id": screen_id,
+        "screen_name": screen_name,
+        "previous_successful_run_id": previous_successful_run_id,
+        "current_count": len(current),
+        "previous_count": len(comparison.unchanged) + len(comparison.removals),
+        "additions_count": len(comparison.additions),
+        "removals_count": len(comparison.removals),
+        "baseline": comparison.is_baseline,
+    }
+    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+
 def _write_symbol_csv(path: Path, symbols: tuple[ResolvedSymbol, ...]) -> None:
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(
