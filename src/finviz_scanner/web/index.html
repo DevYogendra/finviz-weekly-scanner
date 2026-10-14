@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="scanner-token" content="__SCANNER_TOKEN__">
+  <title>Finviz Weekly Scanner</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">FW</span><span>FINVIZ / WEEKLY SCANNER</span></div>
+      <div class="connection"><span class="pulse"></span>LOCAL SESSION</div>
+    </header>
+
+    <main>
+      <section class="command-row" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">CONTROL PANEL</p>
+          <h1 id="page-title">Results and watchlists</h1>
+          <p class="subhead" id="output-location">Loading configuration…</p>
+        </div>
+        <div class="actions">
+          <button class="primary" data-action="scan">Run visible scan</button>
+          <button data-action="doctor">Check health</button>
+          <button data-action="install-schedule">Repair weekly task</button>
+          <button class="danger" data-action="cancel" disabled>Cancel</button>
+        </div>
+      </section>
+
+      <section class="state-strip" aria-label="Scanner state">
+        <div><span>Current state</span><strong id="current-state">Loading</strong></div>
+        <div><span>Latest attempt</span><strong id="latest-attempt">—</strong></div>
+        <div><span>Stable watchlist</span><strong id="stable-watchlist">—</strong></div>
+        <div><span>Weekly task</span><strong id="weekly-task">—</strong></div>
+      </section>
+
+      <section class="results-workspace" aria-labelledby="results-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">REVIEW AND EXPORT</p><h2 id="results-title">Screen results</h2></div>
+          <label class="field-label">Finviz screen <select id="screen-selector" disabled></select></label>
+        </div>
+        <section class="preset-summary" aria-labelledby="preset-title">
+          <div class="preset-heading"><h3 id="preset-title">Selected preset</h3><span id="preset-count"></span></div>
+          <p id="preset-context">Select a configured screen to see its settings.</p>
+          <dl id="preset-options"></dl>
+          <p class="preset-note" id="preset-note">Configured settings for the next scan.</p>
+        </section>
+        <div class="results-meta">
+          <p id="results-success">No successful result loaded.</p>
+          <p id="results-attempt">Latest attempt: unavailable</p>
+          <button id="update-results" hidden>Update results</button>
+        </div>
+        <p id="results-error" class="results-error" role="status" hidden></p>
+        <div class="results-tools">
+          <div class="result-tabs" role="group" aria-label="Result category">
+            <button data-result-tab="current" aria-pressed="true">Current</button>
+            <button data-result-tab="additions" aria-pressed="false">New additions</button>
+            <button data-result-tab="unchanged" aria-pressed="false">Unchanged</button>
+            <button data-result-tab="removals" aria-pressed="false">Removed</button>
+          </div>
+          <label class="field-label">Search <input id="results-search" type="search" placeholder="Ticker or company" autocomplete="off"></label>
+        </div>
+        <div class="selection-tools">
+          <span id="results-count" role="status">0 visible · 0 selected</span>
+          <button id="select-visible" disabled>Select visible</button>
+          <button id="clear-selection" disabled>Clear selection</button>
+        </div>
+        <div class="table-wrap results-table-wrap" tabindex="0" aria-label="Stock results; scroll for more columns">
+          <table class="results-table">
+            <thead><tr>
+              <th scope="col">Select</th>
+              <th scope="col" aria-sort="none"><button data-result-sort="ticker">Ticker</button></th>
+              <th scope="col" aria-sort="none"><button data-result-sort="company_name">Company</button></th>
+              <th scope="col" aria-sort="none"><button data-result-sort="exchange">Exchange</button></th>
+              <th scope="col" aria-sort="ascending"><button data-result-sort="finviz_rank">Finviz rank</button></th>
+              <th scope="col" aria-sort="none"><button data-result-sort="change">Change</button></th>
+            </tr></thead>
+            <tbody id="results-body"><tr><td colspan="6" class="empty">Loading results…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="watchlist-export">
+          <div class="section-heading">
+            <label for="watchlist-preview">TradingView watchlist <span id="selection-total">0 symbols</span></label>
+            <div class="actions"><button class="primary" id="copy-selected" disabled>Copy selected</button><button id="download-selected" disabled>Download TXT</button></div>
+          </div>
+          <textarea id="watchlist-preview" readonly rows="3" spellcheck="false" aria-describedby="export-help"></textarea>
+          <p id="export-feedback" role="status"></p>
+          <p id="export-help">Download TXT, then open your TradingView watchlist menu and choose Import / Upload list. Copy selected copies the same symbols in one step. Your selection includes checked stocks across all filters.</p>
+        </div>
+      </section>
+
+      <div class="workspace">
+        <section class="ledger" aria-labelledby="history-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">OUTCOMES</p><h2 id="history-title">Run history</h2></div>
+            <div class="folder-actions">
+              <button data-open="watchlists">Open watchlists</button>
+              <button data-open="logs">Open logs</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Started</th><th>Screen</th><th>Status</th><th>Extracted</th><th>Outcome</th></tr></thead>
+              <tbody id="history-body"><tr><td colspan="5" class="empty">Loading outcomes…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside class="activity" aria-labelledby="activity-title">
+          <div class="activity-heading">
+            <div><p class="eyebrow">LIVE</p><h2 id="activity-title">Activity</h2></div>
+            <span id="operation-badge">Idle</span>
+          </div>
+          <div class="terminal" id="terminal" role="log" aria-live="polite">
+            <p class="muted">Operations will appear here.</p>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <div id="toast" role="status"></div>
+  <script src="/results.js" defer></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>

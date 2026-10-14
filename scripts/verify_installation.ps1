@@ -3,7 +3,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-& "$ProjectRoot\.venv\Scripts\finviz-scanner.exe" doctor
+& "$ProjectRoot\.venv\Scripts\python.exe" -m finviz_scanner.cli doctor
 & "$ProjectRoot\.venv\Scripts\python.exe" -m pytest
 & "$ProjectRoot\.venv\Scripts\python.exe" -m ruff check .
 & "$ProjectRoot\.venv\Scripts\python.exe" -m ruff format --check .

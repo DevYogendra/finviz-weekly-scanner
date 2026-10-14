@@ -13,11 +13,7 @@ TASK_NAME = "FinvizWeeklyScanner"
 def scheduled_task_command(settings: Settings, project_dir: Path | None = None) -> str:
     root = project_dir or Path.cwd()
     script = root / "scripts" / "run_scan.ps1"
-    logs = settings.output.root_directory / "logs"
-    return (
-        f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script.resolve()}" '
-        f'-ProjectRoot "{root.resolve()}" -LogDirectory "{logs.resolve()}"'
-    )
+    return f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script.resolve()}" -Headed'
 
 
 def schtasks_create_args(settings: Settings, project_dir: Path | None = None) -> list[str]:

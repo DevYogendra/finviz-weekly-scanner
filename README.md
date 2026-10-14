@@ -37,7 +37,68 @@ finviz:
   delay_between_screens_ms: 1000
 ```
 
-## First Scan
+## Launch the web app
+
+After installation and configuration:
+
+1. Open the `finviz-weekly-scanner` repository folder in File Explorer.
+2. Double-click **`web.bat`** in that folder.
+3. The launcher starts the local server in the background and opens the dashboard in your
+   default browser automatically.
+
+To launch from PowerShell, open PowerShell in the repository folder and run:
+
+```powershell
+.\web.bat
+```
+
+The default address is `http://127.0.0.1:8765/`. If that port is already occupied, the launcher
+uses another available local port and opens that address. Use the newly opened browser tab.
+
+If the browser does not open or the launcher appears to do nothing, run this in PowerShell
+from the repository folder to see startup messages and the dashboard address:
+
+```powershell
+.\.venv\Scripts\python.exe -m finviz_scanner.cli web
+```
+
+Keep that PowerShell window open while using the dashboard; press **Ctrl+C** there to stop
+the server. If `.venv\Scripts\python.exe` is missing, complete the installation steps above.
+
+The browser dashboard can run a visible scan, check installation health, repair the weekly task,
+show recent outcomes, and open the generated watchlist or log folders. It listens only on
+`127.0.0.1` and requires a per-session request token for actions.
+
+After a code update, an older server may still be running. If the page shows **Dashboard needs
+reopening**, an empty screen selector, or missing preset settings, launch `web.bat` again and
+use the newly opened tab. Refreshing the old tab alone does not update its server.
+
+## First scan
+
+Click **Run visible scan** in the dashboard. Complete Finviz human verification in the scan
+browser if prompted. After a successful scan, choose a screen to review its results.
+
+### Review results and create a watchlist
+
+1. Choose a Finviz screen in **Screen results**. The table uses its latest successful scan;
+   the latest attempt is displayed separately, including failures. The preset summary below
+   the screen selector shows its configured filters, view, and sort order for the next scan.
+2. Review **Current**, **New additions**, **Unchanged**, or **Removed**. Search by ticker or
+   company and click a column heading to sort. The first successful scan is a baseline with no changes.
+3. All current stocks start selected. Uncheck individual stocks, **Clear selection**, or
+   **Select visible** after filtering. Removed stocks are review-only. Selections survive
+   filters and screen switches while this page stays open.
+4. **Copy selected** copies all selected current stocks as one comma-separated line with
+   exchange prefixes. If clipboard access fails, copy the highlighted preview manually.
+5. **Download TXT** saves exactly the same line as `<screen-id>-selected.txt`. In TradingView,
+   open the watchlist menu and choose **Import / Upload list** to import the file.
+
+Export always preserves the original Finviz rank order, even after table sorting. Selections
+are session-only and never alter scan snapshots or stable watchlist files. When another scan
+succeeds, **Update results** loads it and selects all current stocks again. Incomplete stored
+results disable export and show an error. The results view does not request live stock data.
+
+You can also run the scanner directly from PowerShell.
 
 Run a visible browser first:
 
@@ -84,6 +145,9 @@ finviz-scanner remove-schedule
 ```
 
 The default schedule is Saturday at 08:00 America/Denver. The configured schedule is used after `configure`.
+Scheduled scans open a visible browser so Finviz human verification can be completed. The
+Windows task runs only while the configured user is logged in, and its result code reflects
+whether the scan succeeded, partially succeeded, or failed.
 
 ## Logs And Failures
 

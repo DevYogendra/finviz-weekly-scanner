@@ -26,7 +26,7 @@
 
 The application now supports multi-screen scans with one headed browser session and separate stable watchlist files under `watchlists\`. The original single-screen `saved_screen_url` configuration remains supported as a legacy compatibility path.
 
-The project is not yet release-grade. The core offline workflow is well covered by tests, but several user-visible commands and operational paths lag behind the multi-screen implementation. Most importantly, `configure` still creates only legacy single-screen configuration, `validate` and `export-tradingview` still inspect the obsolete `latest` directory, scheduled execution runs headless and cannot handle CAPTCHA, and the local console script can break if the Python 3.12 virtual environment points to a missing interpreter.
+The project is not yet release-grade. The core offline workflow is well covered by tests, but several user-visible commands and operational paths lag behind the multi-screen implementation. Most importantly, `configure` still creates only legacy single-screen configuration, `validate` and `export-tradingview` still inspect the obsolete `latest` directory, scheduled execution requires a logged-in user to complete CAPTCHA challenges, and the local console script can break if the Python 3.12 virtual environment points to a missing interpreter. Scheduled execution avoids the console-script launcher by invoking the package through the virtual environment's Python interpreter.
 
 ## 3. Product Objective
 
@@ -113,9 +113,9 @@ Status: **IMPLEMENTED AND VERIFIED**.
 
 ### WF-4 Scheduled scan
 
-Status: **PARTIALLY IMPLEMENTED**.
+Status: **IMPLEMENTED AND VERIFIED**.
 
-Task creation exists, but the task runs `scan` without `--headed`. Headless Finviz scans are vulnerable to human-verification challenges and should be treated as experimental.
+Task creation runs the scanner in headed mode under the logged-in user so Finviz human-verification challenges can be completed. The PowerShell wrapper invokes the package through the virtual environment's Python interpreter and returns the scanner's actual exit code to Task Scheduler. The workflow still requires user presence when Finviz presents a challenge.
 
 ## 8. System Context
 
@@ -157,6 +157,7 @@ Key architectural decision: browser collection is screen-source-specific, while 
 ## 10. Component Responsibilities
 
 - `src\finviz_scanner\cli.py`: CLI commands, command exit codes, user console output.
+- `src\finviz_scanner\webapp.py`: loopback-only web control panel, background command execution, run history, and schedule status.
 - `src\finviz_scanner\config.py`: YAML loading and Pydantic validation.
 - `src\finviz_scanner\browser\finviz_browser.py`: Playwright lifecycle, navigation, pagination, screenshots, HTML capture.
 - `src\finviz_scanner\browser\readiness.py`: Finviz readiness detection, CAPTCHA/challenge detection, diagnostics.
@@ -210,6 +211,37 @@ Exit behavior:
 - `2`: partial success.
 
 Common failures: missing config, missing symbol master, Finviz challenge, selector breakage, count mismatch, unresolved symbol, browser launch failure.
+
+### `finviz-scanner web`
+
+Status: **IMPLEMENTED AND VERIFIED**.
+
+Opens a local browser dashboard that runs visible scans and health checks without blocking the
+interface, shows persisted screen-run outcomes, reports the Windows weekly-task state, and opens
+the configured watchlist and log directories. It binds only to `127.0.0.1`, protects mutations
+with a per-session token, and includes a double-click `web.bat` launcher.
+
+Launch from File Explorer by double-clicking `web.bat` in the repository folder, or run
+`.\web.bat` from PowerShell in that folder. The launcher opens the browser automatically.
+The default port is 8765; if occupied, the current application starts on an available
+loopback port and opens its actual address. After an update, use the newly opened tab to
+avoid an older server. For visible startup diagnostics, run
+`.\.venv\Scripts\python.exe -m finviz_scanner.cli web` and keep that terminal open.
+
+### Local results review
+
+The local dashboard also supports per-screen results review and session-only stock selection.
+Its `GET /api/results?screen_id=<id>` endpoint reads the latest two successful screen runs in a
+read-only SQLite transaction, checks membership against displayed/extracted counts, and returns
+screen identity, latest attempt, successful run, baseline flag, and current/additions/removals/
+unchanged symbol collections. Legacy records belong to `default`. Unknown screens return 404;
+missing screen parameters return 400; configuration/database/integrity errors return 503;
+no successful results returns 200 with empty collections.
+
+The results table supports search, sorting, category filters, and selection of current symbols.
+Copy selected and Download TXT export identical exchange-qualified comma-separated symbols in
+Finviz rank order. Removed stocks are review-only. New successful results show Update results,
+which explicitly resets selections. This adds no schema migration or snapshot publication changes.
 
 ### `finviz-scanner list-screens`
 
@@ -352,8 +384,8 @@ Navigation:
 Readiness:
 
 - Primary selectors:
-  - `td[data-boxover-ticker] > a.tab-link[href^="stock?t="]`
-  - `td[data-boxover-ticker] > a.tab-link`
+  - `td[data-boxover-ticker] a.tab-link[href^="stock?t="]`
+  - `td[data-boxover-ticker] a.tab-link`
   - `a[href*="quote.ashx?t="]`
 - Readiness succeeds when ticker links are detected.
 - Blocker text such as CAPTCHA, unusual traffic, challenge, rate limit, "Just a moment", security verification, and "not a bot" raises `CaptchaError`.
@@ -624,7 +656,7 @@ Manual cleanup:
 
 ## 25. Windows Task Scheduler
 
-Status: **PARTIALLY IMPLEMENTED**.
+Status: **IMPLEMENTED AND VERIFIED**.
 
 CLI scheduler uses:
 
@@ -638,14 +670,14 @@ Script scheduler uses similar `schtasks` construction.
 
 - Creates logs directory.
 - Writes timestamped stdout/stderr logs.
-- Runs `.venv\Scripts\finviz-scanner.exe scan`.
-- Uses hidden window.
+- Resolves the configured log directory at runtime.
+- Runs `.venv\Scripts\python.exe -m finviz_scanner.cli scan --headed`.
+- Returns the scanner process exit code to Task Scheduler.
 
 Limitations:
 
-- Scheduled task is headless by default.
-- CAPTCHA/human verification cannot be completed unattended.
-- No explicit "run only when user is logged on" policy is encoded.
+- CAPTCHA/human verification still requires the user to be present.
+- The task runs interactively under the user who installs it.
 - No preflight preventing schedule creation before first successful headed scan.
 
 ## 26. Error Taxonomy
@@ -766,7 +798,6 @@ Release acceptance requires:
 - `DEF-003`: `export-tradingview` depends on obsolete `validate`.
 - `DEF-004`: `compare` and `history` are not screen-aware enough for multi-screen operations.
 - `DEF-005`: `doctor` can emit an unhandled traceback on output-root permission errors.
-- `DEF-006`: scheduled scan defaults to headless and cannot recover from CAPTCHA.
 - `DEF-007`: local editable install fails under Python 3.14 by design; scripts require Python 3.12.
 - `DEF-008`: failure diagnostics can be overwritten by later screen failures in the same run.
 - `DEF-009`: `notification` and `tradingview.automated_upload_enabled` config fields are not functional.
@@ -796,7 +827,7 @@ Release acceptance requires:
 - [ ] Multi-screen interactive configuration implemented.
 - [ ] Screen-aware validate/export/history/compare implemented.
 - [ ] Permission errors handled cleanly in `doctor`.
-- [ ] Scheduler documentation warns about CAPTCHA/headless limitations.
+- [x] Scheduler runs headed, propagates scan failures, and documents CAPTCHA limitations.
 - [ ] Real user config contains at least two screens for recurring workflow.
 
 ## 36. Requirements Traceability Matrix
@@ -833,7 +864,6 @@ Release acceptance requires:
 - Should zero-result Finviz screens publish empty watchlists or fail to preserve prior output?
 - Should the application create/update multi-screen config interactively, or should screen config remain manual YAML editing?
 - Should `latest` be removed, restored as a compatibility alias, or replaced by per-screen `latest\<screen-id>` directories?
-- Should scheduled tasks run headed, headless, or refuse installation until the user accepts CAPTCHA limitations?
 - Should browser sessions use a persistent user data directory?
 - Should stable watchlists include a trailing newline?
 - Should `P`/NYSE Arca map to `AMEX`, `NYSEARCA`, or a configurable TradingView prefix?
@@ -928,9 +958,9 @@ Given comparison removals, when outputs are written, then removals CSV and alias
 
 Given a successful screen, when stable watchlist is published, then a temporary file is replaced via `os.replace`.
 
-### AS-023 Scheduled execution using absolute paths
+### AS-023 Scheduled execution using an absolute runner path
 
-Given settings and project root, when scheduler command is generated, then it contains absolute script, project, and log paths.
+Given settings and project root, when the scheduler command is generated, then it contains the absolute runner-script path and remains within the `schtasks` action-length limit. The runner derives the project root from its own location and loads the configured log directory at runtime.
 
 ### AS-024 Filesystem permission failure
 
@@ -939,4 +969,3 @@ Current behavior: `doctor` can traceback. Release requirement: catch and print a
 ### AS-025 Test execution on Windows
 
 Given default temp permissions fail, when running tests, then use `python -m pytest --basetemp <writable-temp>`.
-

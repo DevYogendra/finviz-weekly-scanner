@@ -289,6 +289,26 @@ def test_old_table_selector_does_not_prevent_extraction() -> None:
     assert [row.ticker for row in rows] == ["CCC"]
 
 
+def test_wrapped_current_ticker_link_is_ready_and_extractable() -> None:
+    html = """
+    <html><body><div id="screener-total">#1 / 1 Total</div>
+      <table><tr><td data-boxover-ticker="AAPL" data-boxover-company="Apple Inc">
+        <span class="flex items-center gap-1">
+          <a class="company-ticker" href="stock?t=AAPL"><span>A</span></a>
+          <a class="tab-link" href="stock?t=AAPL&amp;ty=c&amp;p=d&amp;b=1">AAPL</a>
+        </span>
+      </td></tr></table>
+    </body></html>
+    """
+
+    state = classify_finviz_html(html)
+    rows = extract_rows_from_html(html, page_number=1, source_url="https://finviz.com/screener")
+
+    assert state.ready is True
+    assert state.first_ticker == "AAPL"
+    assert [row.ticker for row in rows] == ["AAPL"]
+
+
 def test_legacy_quote_link_fallback_still_extracts() -> None:
     html = (
         '<html><body>Total: 1<table><tr><td><a href="quote.ashx?t=AAPL">'

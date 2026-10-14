@@ -30,8 +30,8 @@ from finviz_scanner.extraction.finviz_dom import (
 )
 from finviz_scanner.utils import ensure_directory
 
-CURRENT_STRICT_SELECTOR = 'td[data-boxover-ticker] > a.tab-link[href^="stock?t="]'
-CURRENT_STRUCTURAL_SELECTOR = "td[data-boxover-ticker] > a.tab-link"
+CURRENT_STRICT_SELECTOR = 'td[data-boxover-ticker] a.tab-link[href^="stock?t="]'
+CURRENT_STRUCTURAL_SELECTOR = "td[data-boxover-ticker] a.tab-link"
 LEGACY_QUOTE_LINK_SELECTOR = 'a[href*="quote.ashx?t="]'
 QUOTE_LINK_SELECTOR = CURRENT_STRICT_SELECTOR
 RESULT_SELECTORS = (
@@ -408,7 +408,7 @@ def _safe_selected_page_value(page: Any) -> str | None:
 def _candidate_anchor_preview(page: Any) -> tuple[dict[str, str | None], ...]:
     script = """
     () => Array.from(document.querySelectorAll(
-        'td[data-boxover-ticker] > a.tab-link, a[href*="quote.ashx?t="]'
+        'td[data-boxover-ticker] a.tab-link, a[href*="quote.ashx?t="]'
     ))
       .slice(0, 5)
       .map((anchor) => ({

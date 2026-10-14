@@ -1,4 +1,6 @@
 Activate environment:-	.\.venv\Scripts\Activate.ps1
+Open web dashboard: Double-click web.bat in the repository folder, or run .\web.bat from PowerShell in that folder. The dashboard opens automatically; use the newly opened tab.
+Web dashboard startup diagnostics: .\.venv\Scripts\python.exe -m finviz_scanner.cli web
 Interactive initial configuration:-	finviz-scanner configure
 List screens:-	finviz-scanner list-screens
 Refresh symbol master:-	finviz-scanner refresh-symbol-master

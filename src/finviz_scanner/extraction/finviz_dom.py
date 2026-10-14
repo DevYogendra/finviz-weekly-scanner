@@ -13,8 +13,8 @@ from finviz_scanner.errors import CaptchaError, ExtractionError
 from finviz_scanner.models import ExtractedRow, ExtractionResult, PageCapture
 from finviz_scanner.utils import normalize_ticker
 
-CURRENT_STRICT_TICKER_SELECTOR = 'td[data-boxover-ticker] > a.tab-link[href^="stock?t="]'
-CURRENT_STRUCTURAL_TICKER_SELECTOR = "td[data-boxover-ticker] > a.tab-link"
+CURRENT_STRICT_TICKER_SELECTOR = 'td[data-boxover-ticker] a.tab-link[href^="stock?t="]'
+CURRENT_STRUCTURAL_TICKER_SELECTOR = "td[data-boxover-ticker] a.tab-link"
 LEGACY_TICKER_SELECTOR = 'a[href*="quote.ashx?t="]'
 TICKER_SELECTOR_ORDER = (
     CURRENT_STRICT_TICKER_SELECTOR,

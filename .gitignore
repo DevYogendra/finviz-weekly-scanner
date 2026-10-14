@@ -18,4 +18,5 @@ browser-profile/
 *.html
 !.env.example
 !tests/fixtures/*.html
+!src/finviz_scanner/web/*.html
 !tests/fixtures/*.csv

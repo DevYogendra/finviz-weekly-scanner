@@ -18,6 +18,8 @@ def test_windows_scheduler_command_uses_absolute_paths_and_schedule(tmp_path) ->
     command = scheduled_task_command(settings, tmp_path)
     args = schtasks_create_args(settings, tmp_path)
     assert str((tmp_path / "scripts" / "run_scan.ps1").resolve()) in command
+    assert command.endswith("-Headed")
+    assert len(command) <= 261
     assert "/ST" in args
     assert "08:00" in args
 

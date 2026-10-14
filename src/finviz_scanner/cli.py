@@ -92,6 +92,14 @@ def scan(
         raise typer.Exit(1)
 
 
+@app.command()
+def web(port: int = typer.Option(8765, min=1, max=65535)) -> None:
+    """Open the local scanner dashboard in a web browser."""
+    from finviz_scanner.webapp import run_web_app
+
+    run_web_app(port)
+
+
 @app.command("list-screens")
 def list_screens(show_urls: bool = typer.Option(False, help="Print Finviz URLs.")) -> None:
     """List configured Finviz screens."""
